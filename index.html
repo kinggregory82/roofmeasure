@@ -187,6 +187,7 @@ details.sec[open]>summary{margin-bottom:10px}
     <div class="sec">
       <h3><span class="n" id="n1">1</span>Scale <span class="tag" id="t1"></span></h3>
       <div id="sbBox"></div>
+      <div id="sbQuick"></div>
       <div class="field" id="sbPick" style="display:none;margin-top:9px">
         <label>The bar reads</label>
         <select class="inp" id="sbVal"></select>
@@ -295,7 +296,7 @@ var FLAT={ridge:1,eave:1};
 var S={img:null,imgSrc:null,A:null,z:1,px:0,py:0,mode:'trace',ftPerPx:null,calibFeet:null,
   calib:null,draft:[],planes:[],runs:[],sel:null,pitch:6,waste:10,bps:3,seq:0,
   magnet:true,autoSquare:true,autoWaste:true,tol:30,scaleBar:null,cands:[],
-  scaleConfirmed:false,pitchSource:'assumed',pitchMeasured:null};
+  scaleConfirmed:false,pitchSource:'assumed',pitchMeasured:null,pin:null};
 var cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 var mouseImg=null,drag=null,space=false,shift=false;
 var $=function(i){return document.getElementById(i);};
@@ -608,6 +609,10 @@ function detectBuildings(){
   var A=S.A;if(!A)return [];
   var w=A.w,h=A.h,n=w*h;
   var m=A.built;
+  /* the pin is left in the mask on purpose — cutting it out splits the roof it sits on.
+     it gets rejected below only when a blob is mostly pin. */
+  var pinBox=S.pin?{x0:S.pin.x0*A.s,y0:S.pin.y0*A.s,
+    x1:(S.pin.x0+S.pin.w)*A.s,y1:S.pin.y*A.s}:null;
   m=morph(m,w,h,0,3);m=morph(m,w,h,1,3);   /* open  — drop speckle */
   m=morph(m,w,h,1,5);m=morph(m,w,h,0,5);   /* close — bridge ridge lines and vents */
   var lab=new Int32Array(n),id=0,cands=[],minA=n*0.0015,maxA=n*0.22;
@@ -630,6 +635,11 @@ function detectBuildings(){
     }
     if(!px||cnt<minA||cnt>maxA)continue;
     if(uiCnt/cnt>0.35)continue;             /* that is a button, not a building */
+    if(pinBox){                             /* that is the map pin, not a building */
+      var ox=Math.min(x1,pinBox.x1)-Math.max(x0,pinBox.x0);
+      var oy=Math.min(y1,pinBox.y1)-Math.max(y0,pinBox.y0);
+      if(ox>0&&oy>0&&ox*oy>(x1-x0+1)*(y1-y0+1)*0.6)continue;
+    }
     /* a road or field edge runs off the picture, and a clipped building measures short */
     var mg=Math.max(2,Math.round(Math.min(w,h)*0.006));
     if(x0<=mg||y0<=mg||x1>=w-1-mg||y1>=h-1-mg)continue;
@@ -649,7 +659,19 @@ function detectBuildings(){
     cands.push({pts:poly,px:cnt,areaA:pa,
       areaImg:pa/(A.s*A.s),cx:(x0+x1)/2,cy:(y0+y1)/2});
   }
-  cands.sort(function(a,b){return b.px-a.px;});
+  /* the building under the pin is the job. everything else is a neighbour. */
+  var pin=S.pin?{x:S.pin.x*A.s,y:S.pin.y*A.s}:null;
+  cands.forEach(function(c){
+    c.pinned=pin?inPoly(pin,c.pts):false;
+    c.pinDist=pin?Math.hypot(c.cx-pin.x,c.cy-pin.y):0;
+  });
+  cands.sort(function(a,b){
+    if(pin){
+      if(a.pinned!==b.pinned)return a.pinned?-1:1;
+      if(!a.pinned&&Math.abs(a.pinDist-b.pinDist)>4)return a.pinDist-b.pinDist;
+    }
+    return b.px-a.px;
+  });
   return cands.slice(0,4);
 }
 /* once there is a scale AND a footprint, nothing else needs asking for —
@@ -664,7 +686,11 @@ function autoFindRoof(quiet){
   if(!cands.length){
     if(!quiet)toast('Could not pick a roof out of that — switch to Auto and click on it',1);
     return 0;}
-  var keep=cands.filter(function(c){return c.px>=cands[0].px*0.18;}).slice(0,3);
+  var keep;
+  if(S.pin&&cands[0].pinned){
+    var d0=Math.hypot(cands[0].pts[0].x-cands[0].cx,cands[0].pts[0].y-cands[0].cy)*3.0;
+    keep=cands.filter(function(c){return c.pinned||c.pinDist<d0;}).slice(0,3);
+  }else keep=cands.filter(function(c){return c.px>=cands[0].px*0.18;}).slice(0,3);
   keep.forEach(function(c){
     addPlane(c.pts.map(function(p){return{x:p.x/S.A.s,y:p.y/S.A.s};}));});
   S.sel=null;renderPlanes();renderAll();draw();
@@ -994,7 +1020,9 @@ function checks(){
     var mx=Math.max(S.img.width,S.img.height);
     if(mx<600)add('bad','Image is only '+S.img.width+'×'+S.img.height+' px. Zoom in further in Maps and recapture — a roof needs several hundred pixels across.');
     else if(mx<900)add('warn','Image is '+S.img.width+'×'+S.img.height+' px. Workable, but more detail traces cleaner.');
-    if(!S.ftPerPx)add('bad','No scale set. Nothing can be computed until there is one.');
+    if(!S.ftPerPx)add('bad',S.scaleBar
+      ? 'Scale bar found but not read yet — none of the standard readings gave a believable building. Read it off the crop in step 1 and pick it.'
+      : 'No scale set. Nothing can be computed until there is one.');
     else{
       if(S.scaleBar&&!S.scaleConfirmed)
         add('warn','Scale was read off the bar automatically as '+fmt(S.calibFeet,0)+
@@ -1247,31 +1275,87 @@ window.addEventListener('keyup',function(e){
 
 /* ══ scale: read it off the map's own bar ══ */
 function detectScaleBar(img){
-  var x0=Math.floor(img.width*0.30),y0=Math.floor(img.height*0.70);
-  var w=img.width-x0,hh=img.height-y0;
-  if(w<40||hh<12)return null;
-  var c=document.createElement('canvas');c.width=w;c.height=hh;
-  var x=c.getContext('2d',{willReadFrequently:true});
-  x.drawImage(img,x0,y0,w,hh,0,0,w,hh);
-  var d;try{d=x.getImageData(0,0,w,hh).data;}catch(e){return null;}
-  function br(px,py){var i=(py*w+px)*4;return d[i]>212&&d[i+1]>212&&d[i+2]>212;}
-  function tk(px,py){var up=0,dn=0,k;
-    for(k=1;k<12&&py-k>=0;k++){if(br(px,py-k))up++;else break;}
-    for(k=1;k<12&&py+k<hh;k++){if(br(px,py+k))dn++;else break;}
-    return Math.max(up,dn);}
-  var best=null;
-  for(var y=0;y<hh;y++){
-    var p2=0;
-    while(p2<w){
-      if(!br(p2,y)){p2++;continue;}
-      var s2=p2;while(p2<w&&br(p2,y))p2++;
-      var len=p2-s2;
-      if(len<25||len>w*0.75)continue;
-      var t1=tk(s2,y),t2=tk(p2-1,y);
-      if(t1<3&&t2<3)continue;
-      var sc=len*(1+(t1>=3?1:0)+(t2>=3?1:0));
-      if(!best||sc>best.sc)best={x1:x0+s2,x2:x0+p2-1,y:y0+y,len:len,sc:sc};
+  var w=img.width,h=img.height;
+  if(w<80||h<60)return null;
+  var c=document.createElement('canvas');c.width=w;c.height=h;
+  var cx=c.getContext('2d',{willReadFrequently:true});
+  cx.drawImage(img,0,0);
+  var d;try{d=cx.getImageData(0,0,w,h).data;}catch(e){return null;}
+  function g(px,py){var i=(py*w+px)*4,r=d[i],gg=d[i+1],b=d[i+2];
+    return r>gg?(r>b?r:b):(gg>b?gg:b);}
+  /* the scale bar is a THIN bright line drawn over the map. testing it as a ridge —
+     much brighter than what sits 4px above and below — is what separates it from a
+     bright roof or a white UI panel, which are bright for many rows running. the old
+     "all channels over 212" test caught roofs and missed the anti-aliased bar itself. */
+  function isLine(px,py){
+    var v=g(px,py);
+    if(v<140)return false;
+    var u=g(px,py-4),dn=g(px,py+4);
+    return v-(u>dn?u:dn)>60;
+  }
+  var y0=Math.max(5,Math.floor(h*0.60)),x0=Math.floor(w*0.20),best=null,y,px;
+  for(y=y0;y<h-5;y++){
+    px=x0;
+    while(px<w){
+      if(!isLine(px,y)){px++;continue;}
+      var s2=px,e2=px,gap=0;
+      while(px<w&&gap<=2){if(isLine(px,y)){e2=px;gap=0;}else gap++;px++;}
+      var L=e2-s2+1;
+      if(L<30||L>w*0.45)continue;
+      if(!best||L>best.len||(L===best.len&&y>best.y))best={x1:s2,x2:e2,y:y,len:L};
     }
+  }
+  if(best){
+    /* the bar is measured tick to tick, and the ticks sit a few px outside the
+       horizontal line — missing them under-reads the length by ~5% */
+    best.x1=tick(best.x1,best.y,-1);
+    best.x2=tick(best.x2,best.y,1);
+    best.len=best.x2-best.x1;
+  }
+  return best;
+  function tick(xa,ya,dir){
+    var bestX=xa,bestH=0,k,x2,hh,u,dn;
+    for(k=0;k<=6;k++){
+      x2=xa+dir*k;
+      if(x2<1||x2>=w-1)break;
+      u=0;while(u<10&&ya-u-1>=4&&g(x2,ya-u-1)>140)u++;
+      dn=0;while(dn<10&&ya+dn+1<h-4&&g(x2,ya+dn+1)>140)dn++;
+      hh=u+dn;
+      if(hh>=2&&hh>bestH){bestH=hh;bestX=x2;}
+    }
+    return bestX;
+  }
+}
+/* Google drops a red pin on the address you searched. That is the subject property —
+   use it to pick which building to measure, and never measure the pin itself. */
+function detectPin(img){
+  var w=img.width,h=img.height;
+  var c=document.createElement('canvas');c.width=w;c.height=h;
+  var cx=c.getContext('2d',{willReadFrequently:true});
+  cx.drawImage(img,0,0);
+  var d;try{d=cx.getImageData(0,0,w,h).data;}catch(e){return null;}
+  var n=w*h,seen=new Uint8Array(n),best=null,i;
+  function red(j){var k=j*4,r=d[k],gg=d[k+1],b=d[k+2];
+    return r>120&&r-gg>55&&r-b>55;}
+  for(i=0;i<n;i++){
+    if(seen[i]||!red(i))continue;
+    var st=[i],cnt=0,x0=w,x1=-1,y0=h,y1=-1;
+    seen[i]=1;
+    while(st.length){
+      var j=st.pop();cnt++;
+      var x=j%w,y=(j-x)/w;
+      if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
+      if(x>0&&!seen[j-1]&&red(j-1)){seen[j-1]=1;st.push(j-1);}
+      if(x<w-1&&!seen[j+1]&&red(j+1)){seen[j+1]=1;st.push(j+1);}
+      if(y>0&&!seen[j-w]&&red(j-w)){seen[j-w]=1;st.push(j-w);}
+      if(y<h-1&&!seen[j+w]&&red(j+w)){seen[j+w]=1;st.push(j+w);}
+    }
+    var bw=x1-x0+1,bh=y1-y0+1;
+    if(cnt<120||cnt>4000)continue;
+    if(bh<bw||bh>bw*2.2)continue;               /* a pin is a teardrop, taller than wide */
+    if(cnt<bw*bh*0.45)continue;
+    if(!best||cnt>best.n)best={n:cnt,x0:x0,y0:y0,w:bw,h:bh,
+      x:x0+bw/2,y:y1};                          /* the tip is the anchor */
   }
   return best;
 }
@@ -1280,8 +1364,9 @@ var SBVALS=[[10,'10 ft'],[20,'20 ft'],[50,'50 ft'],[100,'100 ft'],[200,'200 ft']
 function renderScaleBar(){
   var box=$('sbBox'),pick=$('sbPick'),btn=$('sbApply');
   if(!S.img){box.innerHTML='<div class="empty-t">Paste a screenshot of the <b>whole</b> Google Maps window — Ctrl+V. The scale bar in its corner is how the app gets its scale.</div>';
-    pick.style.display='none';btn.style.display='none';return;}
+    pick.style.display='none';btn.style.display='none';$('sbQuick').innerHTML='';return;}
   if(!S.scaleBar){
+    $('sbQuick').innerHTML='';
     box.innerHTML='<div class="empty-t"><b>No scale bar found.</b> Screenshot the whole map window, including the bottom corner where Google prints it. Or set the scale by hand below.</div>';
     pick.style.display='none';btn.style.display='none';return;}
   box.innerHTML=L('Scale bar found',S.scaleBar.len+' px long')+
@@ -1292,7 +1377,7 @@ function renderScaleBar(){
   sbCrop();
   /* default to whatever makes the biggest detected building a believable house,
      rather than the old guess, which quietly picked a wrong bar and scaled the whole job by it */
-  var target=(S.cands&&S.cands.length)?S.cands[0].areaImg:0;
+  var target=(S.cands&&S.cands.length)?S.cands[0].areaImg:0;   /* cands[0] is the pinned one */
   var best=-1,bd=1e9;
   var opts=SBVALS.map(function(v,i){
     var f=v[0]/S.scaleBar.len,across=S.img.width*f,lbl;
@@ -1300,7 +1385,7 @@ function renderScaleBar(){
       var sf=target*f*f;
       lbl=v[1]+' — that building is '+fmt(sf)+' sf';
       /* Maps defaults to imperial in the US, so break near-ties toward feet */
-      var d=Math.abs(Math.log(sf/1800))+(/m$/.test(v[1])?0.3:0);
+      var d=Math.abs(Math.log(sf/1800))+(/m$/.test(v[1])?0.3:0)+((sf<400||sf>6000)?4:0);
       if(d<bd){bd=d;best=i;}
     }else lbl=v[1]+' — image covers '+fmt(across)+' ft';
     return '<option value="'+v[0]+'">'+lbl+'</option>';
@@ -1308,6 +1393,37 @@ function renderScaleBar(){
   $('sbVal').innerHTML=opts.join('');
   if(best>=0)$('sbVal').selectedIndex=best;
   pick.style.display='';btn.style.display='';
+  sbQuick(target);
+}
+/* the readings worth offering first: the ones that make the building a building */
+function sbQuick(target){
+  var box=$('sbQuick');
+  var rank=SBVALS.map(function(v,i){
+    var f=v[0]/S.scaleBar.len,sf=target?target*f*f:0;
+    return {i:i,v:v[0],lbl:v[1],sf:sf,
+      d:Math.abs(Math.log((sf||1800)/1800))+(/m$/.test(v[1])?0.3:0)+((sf&&(sf<400||sf>6000))?4:0)};
+  }).sort(function(a,b){return a.d-b.d;}).slice(0,4);
+  box.innerHTML='<div style="font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;'+
+    'color:var(--faint);margin:10px 0 5px">The bar reads</div>'+
+    '<div style="display:flex;gap:5px;flex-wrap:wrap">'+
+    rank.map(function(r){
+      return '<button class="btn go" data-ft="'+r.v+'" style="width:auto;flex:1 1 64px;padding:7px 6px;'+
+        'line-height:1.25">'+r.lbl+(r.sf?'<br><span style="font-size:9.5px;opacity:.72;'+
+        'text-transform:none;letter-spacing:0">'+fmt(r.sf)+' sf</span>':'')+'</button>';
+    }).join('')+'</div>';
+}
+$('sbQuick').addEventListener('click',function(e){
+  var b=e.target.closest('button[data-ft]');if(!b||!S.scaleBar)return;
+  applyBar(parseFloat(b.dataset.ft));
+});
+function applyBar(ft){
+  S.ftPerPx=ft/S.scaleBar.len;S.calibFeet=ft;S.scaleConfirmed=true;S.runs=[];
+  if(!S.planes.length)autoFindRoof(true);
+  var nr=finishOff();
+  renderPlanes();renderRuns();renderAll();draw();
+  toast('Scale set — '+fmt(S.ftPerPx*12,2)+' in/px'+
+    (S.planes.length?' · '+fmt(totals().plan)+' sf footprint'+(nr?', runs derived':''):''));
+  setMode('trace');
 }
 /* blow the bar and its label up so it can be read without leaving the app */
 function sbCrop(){
@@ -1326,15 +1442,7 @@ function sbCrop(){
 }
 $('sbApply').addEventListener('click',function(){
   if(!S.scaleBar)return;
-  var ft=parseFloat($('sbVal').value);
-  S.ftPerPx=ft/S.scaleBar.len;S.calibFeet=ft;S.scaleConfirmed=true;
-  S.runs=[];
-  if(!S.planes.length)autoFindRoof(true);
-  var nr=finishOff();
-  renderPlanes();renderRuns();renderAll();draw();
-  toast('Scale set — '+fmt(S.ftPerPx*12,2)+' in/px'+
-    (S.planes.length?' · '+fmt(totals().plan)+' sf footprint'+(nr?', runs derived':''):' — now trace the roof'));
-  setMode('trace');
+  applyBar(parseFloat($('sbVal').value));
 });
 
 /* ══ scale ══ */
@@ -1460,7 +1568,7 @@ $('resetAll').addEventListener('click',function(){
 });
 function reset(){
   S.planes=[];S.runs=[];S.calib=null;S.ftPerPx=null;S.calibFeet=null;S.draft=[];S.sel=null;
-  S.scaleBar=null;S.cands=[];S.scaleConfirmed=false;S.pitchSource='assumed';S.pitchMeasured=null;renderScaleBar();renderPlanes();renderRuns();renderAll();
+  S.scaleBar=null;S.cands=[];S.pin=null;S.scaleConfirmed=false;S.pitchSource='assumed';S.pitchMeasured=null;renderScaleBar();renderPlanes();renderRuns();renderAll();
 }
 
 /* ══ image ══ */
@@ -1471,20 +1579,20 @@ function loadImage(src,cb){
     busy(true);
     setTimeout(function(){
       S.A=buildAnalysis(im);S.scaleBar=detectScaleBar(im);
+      S.pin=detectPin(im);
       S.cands=S.A?detectBuildings():[];
       renderScaleBar();
       /* apply the best reading straight away — everything downstream fills in.
          it stays flagged as unconfirmed in Checks until the crop is eyeballed. */
-      if(S.scaleBar&&!S.ftPerPx){
-        var pre=parseFloat($('sbVal').value);
-        if(pre>0){S.ftPerPx=pre/S.scaleBar.len;S.calibFeet=pre;S.scaleConfirmed=false;}
-      }
+      /* the bar's VALUE is the one thing a screenshot cannot tell us — bar length alone
+         fits 50 ft and 10 m equally well, and guessing it has been wrong every time.
+         So it is one tap, on buttons that show what each reading would mean. */
       busy(false);fit();
       if(cb)cb();
       else{
         setMode('trace');
         var n=autoFindRoof(true);
-        toast(n?('Traced '+n+' building'+(n>1?'s':'')+' — check the scale bar reading, top right')
+        toast(n?('Traced '+n+' building'+(n>1?'s':'')+' — now tap what the scale bar reads')
                :(Math.max(im.width,im.height)<600?
                  'Loaded, but only '+im.width+'×'+im.height+' — too coarse to trace on its own':
                  'Loaded — could not pick a roof out; hit Auto and click on it'));
