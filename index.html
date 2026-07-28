@@ -492,18 +492,33 @@ function buildAnalysis(img){
   /* vegetation vs built surface — grass and canopy are strongly green-dominant,
      roofs/drives/dirt are not. Deep shadow is thrown out rather than guessed at. */
   var veg=new Uint8Array(n),built=new Uint8Array(n),ui=new Uint8Array(n);
-  for(var q=0;q<n;q++){
-    var r0=R[q],g0=G[q],b0=B[q];
-    var hi=r0>g0?(r0>b0?r0:b0):(g0>b0?g0:b0);
-    var lo=r0<g0?(r0<b0?r0:b0):(g0<b0?g0:b0);
-    var exg=(2*g0-r0-b0)/255;
-    veg[q]=exg>0.05?1:0;
-    built[q]=(!veg[q]&&hi>52)?1:0;
+  var exg=new Float32Array(n),q,r0,g0,b0,hi,lo;
+  for(q=0;q<n;q++){
+    r0=R[q];g0=G[q];b0=B[q];
+    hi=r0>g0?(r0>b0?r0:b0):(g0>b0?g0:b0);
+    lo=r0<g0?(r0<b0?r0:b0):(g0<b0?g0:b0);
+    exg[q]=(2*g0-r0-b0)/255;
     /* browser and Maps chrome — search chips, buttons, panels — is flat near-white.
        Aerial imagery essentially never is, so this is what keeps the takeoff off the UI. */
     ui[q]=(hi>217&&(hi-lo)/(hi||1)<0.12)?1:0;
+    built[q]=hi>52?1:0;                 /* provisional: not shadow */
   }
-  return {w:w,h:h,s:s,R:R,G:G,B:B,mag:mag,maxMag:mx||1,veg:veg,built:built,ui:ui};
+  /* Greenness alone only works in leaf-on imagery. Dormant Michigan grass reads
+     ExG +0.03 against a summer lawn's +0.09, so a fixed 0.05 cutoff calls the whole
+     yard a building — one blob covering 72% of the frame and nothing detectable in it.
+     Walk the cutoff down until what is left could plausibly be roofs and pavement. */
+  var CUT=[0.05,0.035,0.02,0.01,0.0,-0.015],ci,t,bc,best=CUT[CUT.length-1];
+  for(ci=0;ci<CUT.length;ci++){
+    t=CUT[ci];bc=0;
+    for(q=0;q<n;q++)if(built[q]&&exg[q]<=t)bc++;
+    if(bc/n<=0.45){best=t;break;}
+    if(ci===CUT.length-1)best=t;
+  }
+  for(q=0;q<n;q++){
+    veg[q]=exg[q]>best?1:0;
+    if(veg[q])built[q]=0;
+  }
+  return {w:w,h:h,s:s,R:R,G:G,B:B,mag:mag,maxMag:mx||1,veg:veg,built:built,ui:ui,exgCut:best};
 }
 function morph(m,w,h,dilate,k){
   var o=new Uint8Array(w*h),r=(k-1)/2;
@@ -683,6 +698,15 @@ function finishOff(){
 function autoFindRoof(quiet){
   if(!S.A){if(!quiet)toast('Paste a screenshot first',1);return 0;}
   var cands=S.cands&&S.cands.length?S.cands:detectBuildings();
+  if(S.pin&&(!cands.length||!cands[0].pinned)){
+    var pinPoly=roofUnderPin();
+    if(pinPoly){
+      addPlane(pinPoly);S.sel=null;renderPlanes();renderAll();draw();finishOff();
+      if(!quiet)toast('Traced the roof under the pin'+
+        (S.ftPerPx?' · '+fmt(totals().plan)+' sf':' — now tap what the scale bar reads'));
+      return 1;
+    }
+  }
   if(!cands.length){
     if(!quiet)toast('Could not pick a roof out of that — switch to Auto and click on it',1);
     return 0;}
@@ -1147,6 +1171,47 @@ function deriveRuns(quiet){
 }
 
 /* ══ auto-trace ══ */
+function wandPolyAt(pt){
+  if(!S.A)return null;
+  var r=magicWand(pt,S.tol);
+  if(!r||r.count>S.A.w*S.A.h*0.42)return null;
+  var c=traceContour(r.mask,r.w,r.h);
+  if(!c)return null;
+  var pts;
+  if(S.autoSquare)pts=regularize(c,20,2.0);
+  else{var q=dp(c,2.2);if(q.length>3&&dist(q[0],q[q.length-1])<3)q.pop();pts=q;}
+  if(!pts||pts.length<3)return null;
+  return pts.map(function(p){return{x:p.x/S.A.s,y:p.y/S.A.s};});
+}
+/* Leaf-off imagery breaks whole-frame segmentation — dormant grass reads the same as
+   roofing, so the yard and the house fuse into one blob that runs off the frame. But
+   we know exactly where the roof is: under the pin. Flood from there instead. */
+function roofUnderPin(){
+  if(!S.pin||!S.A)return null;
+  var t=S.pin,step=Math.max(2,Math.round(t.h*0.12));
+  var frame=S.img.width*S.img.height;
+  var seeds=[[0,step],[0,step*2],[-step,step],[step,step],[0,step*3]];
+  var tols=[10,14,20,28,38],keep=null,save=S.tol,i,k;
+  for(i=0;i<seeds.length;i++){
+    var p={x:t.x+seeds[i][0],y:t.y+seeds[i][1]};
+    if(p.x<1||p.y<1||p.x>=S.img.width-1||p.y>=S.img.height-1)continue;
+    for(k=0;k<tols.length;k++){
+      S.tol=tols[k];
+      var poly=wandPolyAt(p);
+      if(!poly)continue;
+      var a=areaPx(poly);
+      /* on leaf-off imagery the roof and the dead lawn are nearly the same colour,
+         so a loose flood swallows the whole yard. Take the tightest fill that still
+         looks like a building and stop. */
+      if(a<300||a>frame*0.06)continue;
+      if(rectFit(poly,a)<0.55)continue;
+      keep=poly;break;
+    }
+    if(keep)break;
+  }
+  S.tol=save;
+  return keep;
+}
 function runWand(seed){
   if(!S.A){toast('Image not analysed',1);return;}
   busy(true);
@@ -1283,18 +1348,38 @@ function detectScaleBar(img){
   var d;try{d=cx.getImageData(0,0,w,h).data;}catch(e){return null;}
   function g(px,py){var i=(py*w+px)*4,r=d[i],gg=d[i+1],b=d[i+2];
     return r>gg?(r>b?r:b):(gg>b?gg:b);}
-  /* the scale bar is a THIN bright line drawn over the map. testing it as a ridge —
-     much brighter than what sits 4px above and below — is what separates it from a
-     bright roof or a white UI panel, which are bright for many rows running. the old
-     "all channels over 212" test caught roofs and missed the anti-aliased bar itself. */
+  /* a bar pixel is much brighter than what sits a few px above AND below.
+     sampling a range rather than one fixed offset means a stray border line
+     one row away cannot mask it. */
   function isLine(px,py){
     var v=g(px,py);
     if(v<140)return false;
-    var u=g(px,py-4),dn=g(px,py+4);
+    var u=255,dn=255,k,a,b;
+    for(k=3;k<=7;k++){
+      a=g(px,py-k<0?0:py-k);if(a<u)u=a;
+      b=g(px,py+k>=h?h-1:py+k);if(b<dn)dn=b;
+    }
     return v-(u>dn?u:dn)>60;
   }
-  var y0=Math.max(5,Math.floor(h*0.60)),x0=Math.floor(w*0.20),best=null,y,px;
-  for(y=y0;y<h-5;y++){
+  /* how tall the bright run through this pixel is */
+  function vext(px,py){
+    var u=0,dn=0;
+    while(u<40&&py-u-1>=0&&g(px,py-u-1)>140)u++;
+    while(dn<40&&py+dn+1<h&&g(px,py+dn+1)>140)dn++;
+    return u+dn+1;
+  }
+  function endTick(xa,ya,dir){
+    var bx=xa,bh=0,k,x2,hh;
+    for(k=-2;k<=6;k++){
+      x2=xa+dir*k;
+      if(x2<1||x2>=w-1)continue;
+      hh=vext(x2,ya);
+      if(hh>bh){bh=hh;bx=x2;}
+    }
+    return {x:bx,h:bh};
+  }
+  var y0=Math.max(8,Math.floor(h*0.55)),x0=Math.floor(w*0.15),best=null,y,px;
+  for(y=y0;y<h-8;y++){
     px=x0;
     while(px<w){
       if(!isLine(px,y)){px++;continue;}
@@ -1302,29 +1387,18 @@ function detectScaleBar(img){
       while(px<w&&gap<=2){if(isLine(px,y)){e2=px;gap=0;}else gap++;px++;}
       var L=e2-s2+1;
       if(L<30||L>w*0.45)continue;
-      if(!best||L>best.len||(L===best.len&&y>best.y))best={x1:s2,x2:e2,y:y,len:L};
+      /* the scale bar is a hairline. a panel edge or a thumbnail border is thicker,
+         and its ends turn into long vertical borders instead of short ticks. */
+      if(vext((s2+e2)>>1,y)>5)continue;
+      var t1=endTick(s2,y,-1),t2=endTick(e2,y,1);
+      if(t1.h<2||t1.h>14||t2.h<2||t2.h>14)continue;
+      var cand={x1:t1.x,x2:t2.x,y:y,len:t2.x-t1.x};
+      if(cand.len<25)continue;
+      /* Google prints it at the very bottom, below any thumbnail or panel */
+      if(!best||cand.y>best.y+3||(Math.abs(cand.y-best.y)<=3&&cand.len>best.len))best=cand;
     }
-  }
-  if(best){
-    /* the bar is measured tick to tick, and the ticks sit a few px outside the
-       horizontal line — missing them under-reads the length by ~5% */
-    best.x1=tick(best.x1,best.y,-1);
-    best.x2=tick(best.x2,best.y,1);
-    best.len=best.x2-best.x1;
   }
   return best;
-  function tick(xa,ya,dir){
-    var bestX=xa,bestH=0,k,x2,hh,u,dn;
-    for(k=0;k<=6;k++){
-      x2=xa+dir*k;
-      if(x2<1||x2>=w-1)break;
-      u=0;while(u<10&&ya-u-1>=4&&g(x2,ya-u-1)>140)u++;
-      dn=0;while(dn<10&&ya+dn+1<h-4&&g(x2,ya+dn+1)>140)dn++;
-      hh=u+dn;
-      if(hh>=2&&hh>bestH){bestH=hh;bestX=x2;}
-    }
-    return bestX;
-  }
 }
 /* Google drops a red pin on the address you searched. That is the subject property —
    use it to pick which building to measure, and never measure the pin itself. */
