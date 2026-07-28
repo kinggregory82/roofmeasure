@@ -1,32 +1,1302 @@
-feet;S.ftPerPx = feet / pixels;S.scaleSource = S.scaleSource || 'manual';// UI updatesvar stat = $('statScale');if (stat) {stat.textContent = fmt(S.ftPerPx * 12, 2) + ' in/px';stat.classList.remove('off');}toast('Scale set: ' + fmt(S.ftPerPx * 12, 2) + ' in/px');renderTotals();draw();}/* ══════════════════ scale bar detection ══════════════════ */function detectScaleBar(img) {var canvas = document.createElement('canvas');var ctx = canvas.getContext('2d', { willReadFrequently: true });canvas.width = img.width;canvas.height = img.height;ctx.drawImage(img, 0, 0);// Focus on bottom 25% and bottom-right / bottom-left cornersvar searchH = Math.round(img.height * 0.25);var startY = img.height - searchH;var imgData;try {imgData = ctx.getImageData(0, startY, img.width, searchH);} catch (e) {return null;}var data = imgData.data, w = img.width, h = searchH;var bestBar = null, maxLen = 0;// Search horizontal dark/contrast lines characteristic of map scale barsfor (var y = 10; y < h - 10; y++) {var lineStart = -1;for (var x = 10; x < w - 10; x++) {var idx = (y * w + x) * 4;var lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];  // Look for stark contrast or black lines
-  if (lum < 60) {
-    if (lineStart < 0) lineStart = x;
-  } else {
-    if (lineStart >= 0) {
-      var len = x - lineStart;
-      if (len > 30 && len < w * 0.4 && len > maxLen) {
-        maxLen = len;
-        bestBar = { x1: lineStart, x2: x, y: startY + y, px: len };
-      }
-      lineStart = -1;
-    }
-  }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roof Takeoff</title>
+<style>
+:root{
+  --bg:#14181a;--panel:#1c2225;--panel2:#232a2e;--sunk:#0f1315;
+  --line:#31393e;--soft:#262d31;--ink:#e9edee;--dim:#93a0a6;--faint:#67757c;
+  --chalk:#4FA8E8;--paint:#F2711C;--tape:#D9C67A;--good:#5FD3B2;--warn:#E8A33D;--bad:#EF7D7D;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
 }
-}return bestBar;}$('sbApply').addEventListener('click', function() {
-if (!S.scaleBar) return;
-var ft = parseFloat($('sbVal').value);S.scaleSource = 'bar';setScale(ft, S.scaleBar.px);openStep('step2');});/* ══════════════════ google maps url scale ══════════════════ */function parseMapUrl(url) {var match = url.match(/@(-?\d+.\d+),(-?\d+.\d+),(\d+(?:.\d+)?)z/);if (!match) match = url.match(/@(-?\d+.\d+),(-?\d+.\d+),(\d+(?:.\d+)?)m/);if (!match) return null;return { lat: parseFloat(match[1]), lng: parseFloat(match[2]), z: parseFloat(match[3]) };}function scaleFromUrl() {var url = $('mapUrl').value.trim();var parsed = parseMapUrl(url);if (!parsed) {toast('Could not read zoom level from that URL', 1);return;}var cap = parseFloat($('capScale').value) || 1;var lat = parsed.lat;var z = parsed.z;// Meters per pixel formula for Web Mercatorvar mPerPx = (156543.03392 * Math.cos(lat * Math.PI / 180)) / Math.pow(2, z);var ftPerPx = (mPerPx * 3.28084) / cap;S.ftPerPx = ftPerPx;S.scaleSource = 'url';S.tileZ = z;// Populate shadow lat/lng if not setif (!$('shLat').value)$('shLat').value = lat.toFixed(5);if (!$('shLng').value)$('shLng').value = parsed.lng.toFixed(5);computeSun();var stat = $('statScale');if (stat) {stat.textContent = fmt(S.ftPerPx * 12, 2) + ' in/px';stat.classList.remove('off');}$('urlOut').innerHTML = tl('Calculated scale', fmt(ftPerPx * 12, 2) + ' in/px') + tl('Zoom level', z.toFixed(1));toast('Scale set from URL zoom (' + z.toFixed(1) + 'z)');renderTotals();draw();openStep('step2');}$('scaleFromUrl').addEventListener('click', scaleFromUrl);$('applyScale').addEventListener('click', applyScale);/* ══════════════════ ocr stub ══════════════════ */function runOCR() {if (!S.ocrBox) return;toast('Crop captured — enter the distance read from the box in the field', 0);$('knownLen').focus();setMode('calibrate');}$('ocrBtn').addEventListener('click', function() {setMode('ocr');toast('Drag a box over the scale text on your image');});/* ══════════════════ derive runs ══════════════════ */function deriveRuns(silent) {var ps = planes();if (!ps.length) {if (!silent) toast('Trace at least one plane first', 1);return 0;}S.runs = [];var rType = $('deriveType').value;var edgeMap = [];ps.forEach(function(f) {var p = f.pts;for (var i = 0; i < p.length; i++) {var a = p[i], b = p[(i + 1) % p.length];edgeMap.push({ a: a, b: b, len: dist(a, b) });}});// Simple classification based on geometry and selected typevar count = 0;edgeMap.forEach(function(e, idx) {var kind = 'eave';if (rType === 'gable') {kind = (idx % 2 === 0) ? 'eave' : (idx % 3 === 0 ? 'ridge' : 'rake');} else if (rType === 'hip') {kind = (idx % 4 === 0) ? 'hip' : (idx % 2 === 0 ? 'eave' : 'ridge');} else {kind = idx === 0 ? 'eave' : 'rake';}addRun(e.a, e.b, kind, RUNKIND[kind].label + ' ' + (++count));
-});renderRuns();renderTotals();draw();if (!silent) toast('Derived ' + count + ' runs');return count;}$('deriveBtn').addEventListener('click', function() { deriveRuns(false); });/* ══════════════════ image loading ══════════════════ */function loadImage(src) {busy(true, 'Loading Image');var img = new Image();img.onload = function() {S.img = img;S.imgSrc = src;S.A = buildAnalysis(img);$('drop').classList.add('hide');// Attempt scale bar detection
-var bar = detectScaleBar(img);
-if (bar) {
-  S.scaleBar = bar;
-  $('sbFound').style.display = 'block';
-  $('sbNone').style.display = 'none';$('sbOut').innerHTML = tl('Detected scale line', Math.round(bar.px) + ' pixels');
-} else {
-  S.scaleBar = null;
-  $('sbFound').style.display = 'none';$('sbNone').style.display = 'block';
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13px;overflow:hidden;
+  -webkit-font-smoothing:antialiased}
+button,select,input{font-family:inherit;color:inherit}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+#shell{display:grid;grid-template-columns:1fr 320px;grid-template-rows:auto 1fr;height:100vh}
+#top{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:0 14px;height:48px;
+  background:var(--panel);border-bottom:1px solid var(--line)}
+#top b.brand{font-size:14px;letter-spacing:.14em;text-transform:uppercase;padding-right:14px;
+  border-right:1px solid var(--line)}
+.tools{display:flex;gap:3px}
+.tool{background:transparent;border:1px solid transparent;border-radius:4px;padding:6px 11px;cursor:pointer;
+  display:flex;align-items:center;gap:7px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.tool:hover{background:var(--panel2);color:var(--ink)}
+.tool.on{background:var(--sunk);border-color:var(--line);color:var(--ink)}
+.tool .dot{width:7px;height:7px;border-radius:50%;flex:none}
+.tool kbd{font-family:var(--mono);font-size:9px;padding:1px 4px;border-radius:3px;background:#000a;
+  color:var(--faint);border:1px solid var(--soft)}
+.sp{flex:1}
+#stage{position:relative;background:var(--sunk);overflow:hidden}
+#cv{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#guide{position:absolute;left:50%;top:14px;transform:translateX(-50%);background:#0d1113f2;
+  border:1px solid var(--chalk);border-radius:6px;padding:9px 16px;font-size:13px;max-width:78%;
+  text-align:center;pointer-events:none;line-height:1.5}
+#guide b{color:var(--chalk)}
+#guide.done{border-color:var(--soft);color:var(--faint)}
+#guide.hide{display:none}
+#empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;
+  gap:14px;text-align:center;padding:24px;pointer-events:none}
+#empty.hide{display:none}
+#empty h2{font-size:22px;font-weight:600;margin:0;letter-spacing:.02em}
+#empty p{color:var(--dim);margin:0;max-width:400px;line-height:1.65}
+#empty button{pointer-events:auto}
+#readout{position:absolute;left:12px;bottom:12px;background:#0d1113ee;border:1px solid var(--line);
+  border-radius:5px;padding:8px 11px;font-family:var(--mono);font-size:12px;min-width:180px}
+#readout .r{display:flex;justify-content:space-between;gap:18px;padding:2px 0}
+#readout .r i{font-style:normal;color:var(--faint);font-size:11px}
+#readout .r b{font-weight:500}
+#readout .r.live b{color:var(--paint)}
+#zoom{position:absolute;right:12px;bottom:12px;display:flex;gap:4px}
+#zoom button{width:29px;height:29px;background:#0d1113ee;border:1px solid var(--line);color:var(--dim);
+  border-radius:4px;cursor:pointer;font-family:var(--mono);font-size:13px}
+#zoom button:hover{color:var(--ink)}
+#rail{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto}
+#answer{padding:13px 14px;border-bottom:1px solid var(--line);background:var(--sunk)}
+#answer .k{font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint)}
+#answer .v{display:flex;align-items:baseline;gap:7px;margin-top:3px}
+#answer .v b{font-family:var(--mono);font-size:30px;font-weight:600;color:var(--good);line-height:1}
+#answer .v b.none{color:var(--faint);font-size:19px}
+#answer .v span{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim)}
+#answer .sub{margin-top:5px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+.sec{border-bottom:1px solid var(--line);padding:12px 14px}
+.sec>h3{margin:0 0 9px;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);
+  display:flex;align-items:center;gap:7px}
+.sec>h3 .n{font-family:var(--mono);font-size:10px;width:17px;height:17px;flex:none;border:1px solid var(--line);
+  border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--faint)}
+.sec>h3 .n.on{background:var(--chalk);border-color:var(--chalk);color:#08121a;font-weight:700}
+.sec>h3 .tag{margin-left:auto;font-family:var(--mono);font-size:10px;letter-spacing:0;
+  text-transform:none;color:var(--faint)}
+details.sec>summary{list-style:none;cursor:pointer;margin:0;font-size:11px;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--dim);display:flex;align-items:center;gap:7px}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary::before{content:"+";font-family:var(--mono);color:var(--faint)}
+details.sec[open]>summary::before{content:"−"}
+details.sec[open]>summary{margin-bottom:10px}
+.field{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.field label{font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--faint)}
+.inp{background:var(--sunk);border:1px solid var(--line);border-radius:4px;padding:7px 9px;
+  font-family:var(--mono);font-size:12.5px;width:100%}
+.inp:focus{outline:2px solid var(--chalk);outline-offset:-1px}
+.row{display:flex;gap:7px}
+.row>*{flex:1;min-width:0}
+.btn{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:7px 10px;cursor:pointer;
+  font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);width:100%}
+.btn:hover{border-color:var(--dim)}
+.btn.go{background:var(--chalk);border-color:var(--chalk);color:#08121a;font-weight:600}
+.btn.go:hover{filter:brightness(1.1)}
+.btn.alt{background:var(--good);border-color:var(--good);color:#062019;font-weight:600}
+.btn.ghost{background:transparent;color:var(--dim)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn:focus-visible,.tool:focus-visible,summary:focus-visible{outline:2px solid var(--chalk);outline-offset:2px}
+.note{color:var(--faint);font-size:11.5px;line-height:1.55;margin:8px 0 0}
+.note b{color:var(--dim);font-weight:500}
+.sw{display:flex;align-items:center;gap:7px;padding:4px 0;cursor:pointer;font-size:12px;color:var(--dim)}
+.sw input{accent-color:var(--good)}
+.list{display:flex;flex-direction:column;gap:5px}
+.item{background:var(--panel2);border:1px solid var(--line);border-left-width:3px;border-radius:4px;
+  padding:7px 8px;display:flex;align-items:center;gap:7px;cursor:pointer}
+.item.sel{border-color:var(--chalk);background:#2a3238}
+.item .nm{flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .v{font-family:var(--mono);font-size:11.5px;color:var(--dim);white-space:nowrap}
+.item select{background:var(--sunk);border:1px solid var(--line);border-radius:3px;padding:2px 3px;
+  font-family:var(--mono);font-size:10.5px}
+.item .x{background:transparent;border:0;color:var(--faint);cursor:pointer;padding:1px 4px;font-size:14px}
+.item .x:hover{color:var(--paint)}
+.empty-t{color:var(--faint);font-size:11.5px;line-height:1.6}
+.tot .l{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;
+  border-bottom:1px dotted var(--soft);gap:10px}
+.tot .l:last-child{border-bottom:0}
+.tot .l i{font-style:normal;font-size:12px;color:var(--dim)}
+.tot .l b{font-family:var(--mono);font-size:12.5px;font-weight:500;white-space:nowrap}
+.tot .hd{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);
+  padding:10px 0 3px;border-bottom:1px solid var(--soft);margin-bottom:2px}
+.chk{display:flex;gap:7px;padding:5px 0;font-size:11.5px;line-height:1.5;border-bottom:1px dotted var(--soft)}
+.chk:last-child{border-bottom:0}
+.chk .b{width:4px;flex:none;border-radius:2px}
+.chk.ok{color:var(--dim)}.chk.ok .b{background:var(--good)}
+.chk.warn{color:var(--warn)}.chk.warn .b{background:var(--warn)}
+.chk.bad{color:var(--bad)}.chk.bad .b{background:var(--bad)}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--good);color:#06201a;
+  padding:8px 15px;border-radius:5px;font-size:12.5px;font-weight:600;letter-spacing:.04em;opacity:0;
+  pointer-events:none;transition:opacity .18s;z-index:50;max-width:80vw;text-align:center}
+.toast.show{opacity:1}
+.toast.err{background:var(--bad);color:#2a0808}
+.busy{position:absolute;inset:0;background:#0f1315cc;display:none;align-items:center;justify-content:center;
+  z-index:20;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.busy.on{display:flex}
+@media (max-width:900px){
+  body{overflow:auto}
+  #shell{grid-template-columns:1fr;grid-template-rows:auto 55vh auto;height:auto}
+  #rail{border-left:0;border-top:1px solid var(--line)}
+  #top{height:auto;flex-wrap:wrap;padding:8px 10px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="shell">
+  <header id="top">
+    <b class="brand">Roof Takeoff</b>
+    <div class="tools">
+      <button class="tool" data-mode="scale"><span class="dot" style="background:var(--chalk)"></span>Scale<kbd>S</kbd></button>
+      <button class="tool on" data-mode="trace"><span class="dot" style="background:var(--paint)"></span>Trace<kbd>T</kbd></button>
+      <button class="tool" data-mode="wand"><span class="dot" style="background:var(--good)"></span>Auto<kbd>A</kbd></button>
+      <button class="tool" data-mode="run"><span class="dot" style="background:var(--tape)"></span>Run<kbd>R</kbd></button>
+      <button class="tool" data-mode="edit"><span class="dot" style="background:var(--dim)"></span>Edit<kbd>E</kbd></button>
+    </div>
+    <div class="sp"></div>
+    <div class="num" id="topScale" style="color:var(--faint)">no scale</div>
+  </header>
+
+  <main id="stage">
+    <canvas id="cv"></canvas>
+    <div id="guide"></div>
+    <div id="empty">
+      <h2>Paste a screenshot</h2>
+      <p>Zoom Google Maps until the roof fills your screen, then screenshot the <b>whole window</b> — the scale bar in the corner is how this works. Press <b>Ctrl+V</b> to paste it here.</p>
+      <button class="btn" style="width:auto;padding:9px 20px" id="pick">Choose a file</button>
+      <input type="file" id="file" accept="image/*" hidden>
+    </div>
+    <div id="readout"></div>
+    <div id="zoom"><button id="zOut">−</button><button id="zIn">+</button>
+      <button id="zFit" style="width:auto;padding:0 8px;font-size:10px">FIT</button></div>
+    <div class="busy" id="busy">Working</div>
+  </main>
+
+  <aside id="rail">
+    <div id="answer">
+      <div class="k">Order</div>
+      <div class="v"><b id="ansSq" class="none">—</b><span id="ansUnit"></span></div>
+      <div class="sub" id="ansSub">Paste a screenshot to start</div>
+    </div>
+
+    <div class="sec">
+      <h3><span class="n" id="n1">1</span>Scale <span class="tag" id="t1"></span></h3>
+      <div id="sbBox"></div>
+      <div class="field" id="sbPick" style="display:none;margin-top:9px">
+        <label>The bar reads</label>
+        <select class="inp" id="sbVal"></select>
+      </div>
+      <button class="btn go" id="sbApply" style="display:none">Use it</button>
+      <details style="margin-top:9px"><summary style="cursor:pointer;color:var(--faint);font-size:11.5px">No bar in shot — set it by hand</summary>
+        <p class="note" style="margin:8px 0">Draw a line across something of known size, then say how long it is.</p>
+        <div class="tot" id="calibPx" style="margin-bottom:8px"></div>
+        <div class="field"><label>Reference</label>
+          <select class="inp" id="refObj">
+            <option value="">— pick something in the picture —</option>
+            <option value="16">Garage door, double — 16 ft</option>
+            <option value="9">Garage door, single — 9 ft</option>
+            <option value="3">Entry door — 3 ft</option>
+            <option value="8">Sheet of plywood — 8 ft</option>
+            <option value="19">Full-size pickup — 19 ft</option>
+          </select></div>
+        <div class="row">
+          <div class="field"><label>That line is really</label>
+            <input class="inp num" id="knownLen" type="number" step="0.01" placeholder="16"></div>
+          <div class="field" style="flex:0 0 54px"><label>Units</label>
+            <select class="inp" id="knownUnit"><option value="1">ft</option><option value="3.280839895">m</option></select></div>
+        </div>
+        <button class="btn" id="applyScale">Set scale from that line</button>
+      </details>
+    </div>
+
+    <div class="sec">
+      <h3><span class="n" id="n2">2</span>Trace the roof <span class="tag" id="t2"></span></h3>
+      <div class="row" style="margin-bottom:9px">
+        <button class="btn alt" id="wandBtn">Auto-trace</button>
+        <button class="btn ghost" id="squareBtn" style="flex:0 0 84px">Square up</button>
+      </div>
+      <div class="list" id="planeList"></div>
+      <div class="row" style="margin-top:9px">
+        <div class="field" style="margin:0;flex:0 0 96px"><label>Type</label>
+          <select class="inp" id="roofType"><option value="gable">Gable</option><option value="hip">Hip</option><option value="flat">Shed</option></select></div>
+        <button class="btn alt" id="deriveBtn" style="align-self:flex-end">Derive runs</button>
+      </div>
+      <div class="list" id="runList" style="margin-top:8px"></div>
+    </div>
+
+    <div class="sec">
+      <h3><span class="n" id="n3">B</span>Pitch <span class="tag" id="t3"></span></h3>
+      <select class="inp" id="pitch"></select>
+      <p class="note">Cannot be read from overhead. Use a pitch gauge on a ladder, or count siding courses on the gable end.</p>
+    </div>
+
+    <div class="sec">
+      <h3>Takeoff</h3>
+      <div class="tot" id="totals"></div>
+      <button class="btn" id="copyBtn" style="margin-top:10px">Copy takeoff</button>
+    </div>
+
+    <div class="sec">
+      <h3>Checks <span class="tag" id="chkTag"></span></h3>
+      <div id="checks"></div>
+    </div>
+
+    <details class="sec">
+      <summary>Settings</summary>
+      <div class="row"><div class="field"><label>Waste %</label><input class="inp num" id="waste" type="number" value="10"></div>
+        <div class="field"><label>Bundles / sq</label><input class="inp num" id="bps" type="number" value="3"></div></div>
+      <div class="row"><div class="field"><label>Overhang ft</label><input class="inp num" id="overhang" type="number" value="1" step="0.25"></div>
+        <div class="field"><label>Cap lf / bundle</label><input class="inp num" id="capLf" type="number" value="25"></div></div>
+      <label class="sw"><input type="checkbox" id="autoWaste" checked> Set waste from complexity</label>
+      <label class="sw"><input type="checkbox" id="magnet" checked> Magnetic edges</label>
+      <label class="sw"><input type="checkbox" id="autoSquare" checked> Square up after tracing</label>
+      <div class="field" style="margin-top:7px"><label>Auto-trace sensitivity <span class="num" id="tolVal">30</span></label>
+        <input type="range" id="tol" min="8" max="80" value="30" style="width:100%;accent-color:var(--good)"></div>
+      <div class="row" style="margin-top:8px"><button class="btn ghost" id="saveJob">Save job</button>
+        <button class="btn ghost" id="openJob">Open job</button></div>
+      <input type="file" id="jobFile" accept=".json" hidden>
+      <button class="btn ghost" id="resetAll" style="margin-top:6px">Start over</button>
+      <p class="note"><b>S</b> scale · <b>T</b> trace · <b>A</b> auto · <b>R</b> run · <b>E</b> edit · <b>Enter</b> close ·
+        <b>Esc</b> cancel · <b>Backspace</b> undo point · <b>Shift</b> square · <b>Space-drag</b> pan · <b>Del</b> delete</p>
+    </details>
+  </aside>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+(function(){
+'use strict';
+
+/* ══ state ══ */
+var PAL=['#5FD3B2','#8FB8FF','#F2A65A','#EF7D9E','#C0A5F0','#9FD356','#7FD8E8','#E8C55F'];
+var RUNKIND={ridge:'Ridge',eave:'Eave',rake:'Rake',hip:'Hip',valley:'Valley'};
+var FLAT={ridge:1,eave:1};
+var S={img:null,imgSrc:null,A:null,z:1,px:0,py:0,mode:'trace',ftPerPx:null,calibFeet:null,
+  calib:null,draft:[],planes:[],runs:[],sel:null,pitch:6,waste:10,bps:3,seq:0,
+  magnet:true,autoSquare:true,autoWaste:true,tol:30,scaleBar:null};
+var cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+var mouseImg=null,drag=null,space=false,shift=false;
+var $=function(i){return document.getElementById(i);};
+
+/* ══ verified geometry (unchanged from the tested build) ══ */
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
+function areaPx(p){var a=0;for(var i=0;i<p.length;i++){var j=(i+1)%p.length;a+=p[i].x*p[j].y-p[j].x*p[i].y;}return Math.abs(a)/2;}
+function slope(r){return Math.sqrt(144+r*r)/12;}
+function diagF(r){return Math.sqrt(1+(r*r)/288);}
+function centroid(p){var x=0,y=0;p.forEach(function(q){x+=q.x;y+=q.y;});return{x:x/p.length,y:y/p.length};}
+function perim(p,cl){var d=0;for(var i=0;i<p.length-1;i++)d+=dist(p[i],p[i+1]);if(cl&&p.length>2)d+=dist(p[p.length-1],p[0]);return d;}
+function segInt(a,b,c,d){
+  function o(p,q,r){var v=(q.y-p.y)*(r.x-q.x)-(q.x-p.x)*(r.y-q.y);return v>1e-9?1:v<-1e-9?2:0;}
+  var o1=o(a,b,c),o2=o(a,b,d),o3=o(c,d,a),o4=o(c,d,b);
+  return o1!==o2&&o3!==o4;
+}
+function selfIntersects(p){
+  for(var i=0;i<p.length;i++)for(var j=i+2;j<p.length;j++){
+    if(i===0&&j===p.length-1)continue;
+    if(segInt(p[i],p[(i+1)%p.length],p[j],p[(j+1)%p.length]))return true;}
+  return false;
+}
+function inPoly(p,pts){
+  var c=false;
+  for(var i=0,j=pts.length-1;i<pts.length;j=i++){
+    if(((pts[i].y>p.y)!==(pts[j].y>p.y))&&
+      (p.x<(pts[j].x-pts[i].x)*(p.y-pts[i].y)/(pts[j].y-pts[i].y)+pts[i].x))c=!c;}
+  return c;
+}
+function fitLine(pts,i0,i1,n){
+  var m=i1-i0+1,cx=0,cy=0,k,q;
+  for(k=i0;k<=i1;k++){q=pts[k%n];cx+=q.x;cy+=q.y;}
+  cx/=m;cy/=m;
+  var sxx=0,syy=0,sxy=0,dx,dy;
+  for(k=i0;k<=i1;k++){q=pts[k%n];dx=q.x-cx;dy=q.y-cy;sxx+=dx*dx;syy+=dy*dy;sxy+=dx*dy;}
+  var th=0.5*Math.atan2(2*sxy,sxx-syy),d={x:Math.cos(th),y:Math.sin(th)};
+  var md=0,tmin=1e9,tmax=-1e9,dev,t;
+  for(k=i0;k<=i1;k++){q=pts[k%n];dx=q.x-cx;dy=q.y-cy;
+    dev=Math.abs(dx*d.y-dy*d.x);if(dev>md)md=dev;
+    t=dx*d.x+dy*d.y;if(t<tmin)tmin=t;if(t>tmax)tmax=t;}
+  return {p:{x:cx,y:cy},d:d,maxDev:md,L:tmax-tmin};
+}
+function fitLines(pts,eps){
+  var n=pts.length,out=[],start=0,guard=0;
+  while(start<n&&guard++<n+4){
+    var end=start+1,best=fitLine(pts,start,end,n);
+    while(end-start+1<n){
+      var f=fitLine(pts,start,end+1,n);
+      if(f.maxDev>eps)break;
+      best=f;end++;
+    }
+    out.push(best);start=end;
+  }
+  return out;
+}
+function regularize(pts,tolDeg,eps){
+  if(pts.length<3)return pts;
+  tolDeg=tolDeg||20;eps=eps||2.0;
+  var P=0,i;
+  for(i=0;i<pts.length;i++)P+=dist(pts[i],pts[(i+1)%pts.length]);
+  if(P<1)return pts;
+  var lines=fitLines(pts,eps);
+  if(lines.length<3)return pts;
+
+  var bins=new Float64Array(90),k,d;
+  lines.forEach(function(l){
+    var a=Math.atan2(l.d.y,l.d.x)*180/Math.PI,m=((a%90)+90)%90;
+    bins[Math.floor(m)%90]+=l.L;});
+  var sm=new Float64Array(90);
+  for(k=0;k<90;k++)for(d=-2;d<=2;d++)sm[k]+=bins[((k+d)%90+90)%90]*(3-Math.abs(d));
+  var bi=0;for(k=1;k<90;k++)if(sm[k]>sm[bi])bi=k;
+  var num=0,den=0;
+  for(d=-3;d<=3;d++){var ix=((bi+d)%90+90)%90;num+=bins[ix]*(bi+d+0.5);den+=bins[ix];}
+  var theta=(den?num/den:bi+0.5)*Math.PI/180;
+
+  lines.forEach(function(l){
+    var a=Math.atan2(l.d.y,l.d.x),rel=(a-theta)*180/Math.PI;
+    var q=Math.round(rel/90)*90,off=rel-q;
+    if(Math.abs(off)<=tolDeg){
+      var dir=theta+q*Math.PI/180;
+      l.d={x:Math.cos(dir),y:Math.sin(dir)};}
+  });
+
+  var tolOff=Math.max(2.5,P*0.008);
+  function near(a,b){
+    if(Math.abs(a.d.x*b.d.y-a.d.y*b.d.x)>0.09)return false;
+    return Math.abs((b.p.x-a.p.x)*a.d.y-(b.p.y-a.p.y)*a.d.x)<tolOff;
+  }
+  function combine(a,b){
+    var w=a.L+b.L;
+    a.p={x:(a.p.x*a.L+b.p.x*b.L)/w,y:(a.p.y*a.L+b.p.y*b.L)/w};
+    if(b.L>a.L)a.d=b.d;
+    a.L=w;
+  }
+  function mergeRound(arr){
+    var o=[];
+    arr.forEach(function(c){
+      var pv=o[o.length-1];
+      if(pv&&near(pv,c)){combine(pv,c);return;}
+      o.push({p:{x:c.p.x,y:c.p.y},d:c.d,L:c.L});});
+    while(o.length>3&&near(o[0],o[o.length-1]))combine(o[0],o.pop());
+    return o;
+  }
+  var mg=mergeRound(lines);
+  var minL=Math.max(2.5,P*0.015);
+  var keep=mg.filter(function(l){return l.L>=minL;});
+  if(keep.length>=3)mg=mergeRound(keep);
+  if(mg.length<3)return pts;
+
+  var out=[];
+  for(i=0;i<mg.length;i++){
+    var A=mg[i],B=mg[(i+1)%mg.length];
+    var det=A.d.x*(-B.d.y)-A.d.y*(-B.d.x);
+    if(Math.abs(det)<1e-9)continue;
+    var rx=B.p.x-A.p.x,ry=B.p.y-A.p.y;
+    var t=(rx*(-B.d.y)-ry*(-B.d.x))/det;
+    out.push({x:A.p.x+A.d.x*t,y:A.p.y+A.d.y*t});
+  }
+  if(out.length<3)return pts;
+  var ar=areaPx(out),a0=areaPx(pts);
+  if(!isFinite(ar)||ar<a0*0.5||ar>a0*2)return pts;
+  return out;
+}
+function dominantAxis(edges){
+  var bins=new Float64Array(90),k,d;
+  edges.forEach(function(e){
+    var a=e.ang*180/Math.PI,m=((a%90)+90)%90;
+    bins[Math.floor(m)%90]+=e.L;});
+  var sm=new Float64Array(90);
+  for(k=0;k<90;k++)for(d=-2;d<=2;d++)sm[k]+=bins[((k+d)%90+90)%90]*(3-Math.abs(d));
+  var bi=0;for(k=1;k<90;k++)if(sm[k]>sm[bi])bi=k;
+  var num=0,den=0;
+  for(d=-3;d<=3;d++){var ix=((bi+d)%90+90)%90;num+=bins[ix]*(bi+d+0.5);den+=bins[ix];}
+  return (den?num/den:bi+0.5)*Math.PI/180;
+}
+function planeEdges(f,idx){
+  var e=[],n=f.pts.length;
+  for(var i=0;i<n;i++){
+    var a=f.pts[i],b=f.pts[(i+1)%n],L=dist(a,b);
+    if(L<1e-6)continue;
+    e.push({a:a,b:b,L:L,mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2},
+      ang:Math.atan2(b.y-a.y,b.x-a.x),plane:idx,shared:false});
+  }
+  return e;
+}
+function edgeOverlap(e1,e2,tol){
+  if(Math.abs(Math.sin(e1.ang-e2.ang))>0.26)return 0;
+  var d={x:Math.cos(e1.ang),y:Math.sin(e1.ang)};
+  if(Math.abs((e2.mid.x-e1.mid.x)*d.y-(e2.mid.y-e1.mid.y)*d.x)>tol)return 0;
+  function pr(p){return (p.x-e1.a.x)*d.x+(p.y-e1.a.y)*d.y;}
+  var t2a=pr(e2.a),t2b=pr(e2.b),lo2=Math.min(t2a,t2b),hi2=Math.max(t2a,t2b);
+  var ov=Math.min(e1.L,hi2)-Math.max(0,lo2);
+  return ov>0?ov/Math.min(e1.L,e2.L):0;
+}
+function parallelish(a1,a2,deg){
+  var s=Math.abs(Math.sin(a1-a2));
+  return s<=Math.sin(deg*Math.PI/180);
+}
+function cornerConvex(v,edges,ps,tol){
+  var inc=edges.filter(function(e){return dist(e.a,v)<tol||dist(e.b,v)<tol;});
+  if(inc.length<2)return true;
+  var pts=inc.slice(0,2).map(function(e){
+    var far=dist(e.a,v)<tol?e.b:e.a,L=dist(far,v)||1,k=Math.min(L*0.4,tol*6);
+    return {x:v.x+(far.x-v.x)/L*k,y:v.y+(far.y-v.y)/L*k};});
+  var mid={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};
+  return ps.some(function(f){return inPoly(mid,f.pts);});
+}
+function buildAnalysis(img){
+  var MAX=1500,s=Math.min(1,MAX/Math.max(img.width,img.height));
+  var w=Math.max(1,Math.round(img.width*s)),h=Math.max(1,Math.round(img.height*s));
+  var c=document.createElement('canvas');c.width=w;c.height=h;
+  var x=c.getContext('2d',{willReadFrequently:true});
+  x.drawImage(img,0,0,w,h);
+  var d;
+  try{d=x.getImageData(0,0,w,h).data;}catch(e){return null;}
+  var n=w*h,R=new Uint8Array(n),G=new Uint8Array(n),B=new Uint8Array(n),gray=new Float32Array(n);
+  for(var i=0,p=0;i<n;i++,p+=4){R[i]=d[p];G[i]=d[p+1];B[i]=d[p+2];gray[i]=0.299*d[p]+0.587*d[p+1]+0.114*d[p+2];}
+  /* 3x3 blur */
+  var bl=new Float32Array(n);
+  for(var y=0;y<h;y++)for(var xx=0;xx<w;xx++){
+    var sum=0,cnt=0;
+    for(var dy=-1;dy<=1;dy++)for(var dx=-1;dx<=1;dx++){
+      var ny=y+dy,nx=xx+dx;if(ny<0||nx<0||ny>=h||nx>=w)continue;
+      sum+=gray[ny*w+nx];cnt++;}
+    bl[y*w+xx]=sum/cnt;}
+  /* sobel */
+  var mag=new Float32Array(n),mx=0;
+  for(var y2=1;y2<h-1;y2++)for(var x2=1;x2<w-1;x2++){
+    var i0=y2*w+x2;
+    var gx=-bl[i0-w-1]-2*bl[i0-1]-bl[i0+w-1]+bl[i0-w+1]+2*bl[i0+1]+bl[i0+w+1];
+    var gy=-bl[i0-w-1]-2*bl[i0-w]-bl[i0-w+1]+bl[i0+w-1]+2*bl[i0+w]+bl[i0+w+1];
+    var m=Math.hypot(gx,gy);mag[i0]=m;if(m>mx)mx=m;}
+  return {w:w,h:h,s:s,R:R,G:G,B:B,mag:mag,maxMag:mx||1};
+}
+function morph(m,w,h,dilate,k){
+  var o=new Uint8Array(w*h),r=(k-1)/2;
+  for(var y=0;y<h;y++)for(var x=0;x<w;x++){
+    var hit=dilate?0:1;
+    for(var dy=-r;dy<=r&&(dilate?!hit:hit);dy++)for(var dx=-r;dx<=r;dx++){
+      var ny=y+dy,nx=x+dx;
+      var v=(ny<0||nx<0||ny>=h||nx>=w)?0:m[ny*w+nx];
+      if(dilate&&v){hit=1;break;}
+      if(!dilate&&!v){hit=0;break;}}
+    o[y*w+x]=hit;}
+  return o;
+}
+function traceContour(m,w,h){
+  var sx=-1,sy=-1;
+  for(var y=0;y<h&&sx<0;y++)for(var x=0;x<w;x++)if(m[y*w+x]){sx=x;sy=y;break;}
+  if(sx<0)return null;
+  var D=[[-1,0],[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1]];
+  var pts=[],cx=sx,cy=sy,b=0,steps=0,max=Math.min(200000,w*h*4);
+  while(steps++<max){
+    pts.push({x:cx,y:cy});
+    var moved=false;
+    for(var k=1;k<=8;k++){
+      var ni=(b+k)%8,nx=cx+D[ni][0],ny=cy+D[ni][1];
+      if(nx<0||ny<0||nx>=w||ny>=h)continue;
+      if(m[ny*w+nx]){cx=nx;cy=ny;b=(ni+5)%8;moved=true;break;}}
+    if(!moved)break;
+    if(cx===sx&&cy===sy&&pts.length>3)break;
+  }
+  return pts.length>7?pts:null;
+}
+function dp(pts,eps){
+  if(pts.length<3)return pts;
+  var dmax=0,idx=0,a=pts[0],b=pts[pts.length-1];
+  for(var i=1;i<pts.length-1;i++){
+    var d=ptLine(pts[i],a,b);if(d>dmax){dmax=d;idx=i;}}
+  if(dmax>eps){
+    var l=dp(pts.slice(0,idx+1),eps),r=dp(pts.slice(idx),eps);
+    return l.slice(0,-1).concat(r);}
+  return [a,b];
+}
+function ptLine(p,a,b){
+  var dx=b.x-a.x,dy=b.y-a.y,L=dx*dx+dy*dy;
+  if(L===0)return dist(p,a);
+  var t=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/L));
+  return Math.hypot(p.x-(a.x+t*dx),p.y-(a.y+t*dy));
+}
+function magicWand(seed,tol){
+  var A=S.A;if(!A)return null;
+  var a=toA(seed),sx=Math.round(a.x),sy=Math.round(a.y);
+  if(sx<0||sy<0||sx>=A.w||sy>=A.h)return null;
+  var w=A.w,h=A.h,n=w*h,mask=new Uint8Array(n);
+  var si=sy*w+sx,sr=A.R[si],sg=A.G[si],sb=A.B[si];
+  var t2=tol*tol*3,stack=[si],count=0,cap=Math.min(n,600000);
+  mask[si]=1;
+  while(stack.length&&count<cap){
+    var i=stack.pop();count++;
+    var x=i%w,y=(i-x)/w;
+    var nb=[x>0?i-1:-1,x<w-1?i+1:-1,y>0?i-w:-1,y<h-1?i+w:-1];
+    for(var k=0;k<4;k++){
+      var j=nb[k];if(j<0||mask[j])continue;
+      var dr=A.R[j]-sr,dg=A.G[j]-sg,db=A.B[j]-sb;
+      if(dr*dr+dg*dg+db*db<=t2){mask[j]=1;stack.push(j);}}
+  }
+  if(count<40)return null;
+  mask=morph(mask,w,h,1,3);   /* dilate */
+  mask=morph(mask,w,h,0,3);   /* erode  */
+  if(!mask[sy*w+sx])mask[sy*w+sx]=1;
+  /* ground cover wraps the frame; a roof sits inside it */
+  var mnx=w,mxx=-1,mny=h,mxy=-1;
+  for(var yy=0;yy<h;yy++)for(var xx=0;xx<w;xx++)if(mask[yy*w+xx]){
+    if(xx<mnx)mnx=xx;if(xx>mxx)mxx=xx;if(yy<mny)mny=yy;if(yy>mxy)mxy=yy;}
+  var borders=(mnx<=1?1:0)+(mxx>=w-2?1:0)+(mny<=1?1:0)+(mxy>=h-2?1:0);
+  return {mask:mask,w:w,h:h,sx:sx,sy:sy,count:count,borders:borders,frac:count/(w*h)};
+}
+/* ══ measures ══ */
+function fPlan(f){return S.ftPerPx?areaPx(f.pts)*S.ftPerPx*S.ftPerPx:0;}
+function fArea(f){return fPlan(f)*slope(f.pitch);}
+function onPlanes(){return S.planes.filter(function(f){return f.on;});}
+function runFt(r){
+  if(!S.ftPerPx)return 0;
+  var d=dist(r.a,r.b)*S.ftPerPx;
+  if(FLAT[r.kind])return d;
+  if(r.kind==='rake')return d*slope(S.pitch);
+  return d*diagF(S.pitch);
+}
+function usingTyped(){return false;}
+function totals(){
+  var plan=0,area=0;
+  onPlanes().forEach(function(f){plan+=fPlan(f);area+=fArea(f);});
+  var runs={ridge:0,eave:0,rake:0,hip:0,valley:0};
+  S.runs.forEach(function(r){runs[r.kind]+=runFt(r);});
+
+  var ww=area*(1+S.waste/100);
+  return {plan:plan,area:area,ww:ww,sq:area/100,sqW:ww/100,
+    bundles:Math.ceil(ww/100*S.bps),runs:runs};
+}
+function suggestWaste(){
+  var t=totals();
+  if(!t.sq)return 10;
+  var cut=(t.runs.valley+t.runs.hip)/Math.max(1,t.sq);
+  return Math.round(Math.min(25,10+Math.min(8,cut*1.4)+(onPlanes().length>6?2:0)));
 }
 
-busy(false);
-fit();
-toast('Image loaded (' + img.width + '×' + img.height + 'px)');
-};img.onerror = function() {busy(false);toast('Failed to load image', 1);};img.src = src;}$('pickBtn').addEventListener('click', function() { $('file').click(); });$('file').addEventListener('change', function(e) {var f = e.target.files[0];if (!f) return;var reader = new FileReader();reader.onload = function(ev) { loadImage(ev.target.result); };reader.readAsDataURL(f);});// Drag & Dropvar stage = $('stage');stage.addEventListener('dragover', function(e) { e.preventDefault(); });stage.addEventListener('drop', function(e) {e.preventDefault();var f = e.dataTransfer.files[0];if (f && f.type.startsWith('image/')) {var reader = new FileReader();reader.onload = function(ev) { loadImage(ev.target.result); };reader.readAsDataURL(f);}});// Paste from Clipboardwindow.addEventListener('paste', function(e) {var items = (e.clipboardData || e.originalEvent.clipboardData).items;for (var i = 0; i < items.length; i++) {if (items[i].type.indexOf('image') !== -1) {var blob = items[i].getAsFile();var reader = new FileReader();reader.onload = function(ev) { loadImage(ev.target.result); };reader.readAsDataURL(blob);break;}}});/* ══════════════════ zoom controls ══════════════════ */$('zIn').addEventListener('click', function() {var r = cv.getBoundingClientRect();zoomAt(r.width / 2, r.height / 2, 1.25);});$('zOut').addEventListener('click', function() {var r = cv.getBoundingClientRect();zoomAt(r.width / 2, r.height / 2, 1 / 1.25);});$('zFit').addEventListener('click', fit);/* ══════════════════ ui helpers ══════════════════ */function busy(on, msg) {var el = $('busy');if (msg) $('busyMsg').textContent = msg;el.classList.toggle('on', !!on);}function toast(msg, isErr) {var el = $('toast');el.textContent = msg;el.className = 'toast show' + (isErr ? ' err' : '');clearTimeout(el._t);el._t = setTimeout(function() { el.className = 'toast'; }, 2800);}function magBadge() {var b = $('magbadge');b.classList.toggle('on', S.magnet);}/* ══════════════════ job persistence ══════════════════ */function scheduleSave() {if (!$('autosave').checked) return;clearTimeout(S._saveTimer);S._saveTimer = setTimeout(saveJobLocal, 1000);}function saveJobLocal() {if (!S.imgSrc) return;var job = {ftPerPx: S.ftPerPx,calibFeet: S.calibFeet,calib: S.calib,facets: S.facets,runs: S.runs,waste: S.waste,bps: S.bps,scaleSource: S.scaleSource,imgSrc: S.imgSrc};try {localStorage.setItem('rooftakeoff_job', JSON.stringify(job));} catch (e) {}}function loadJobLocal() {try {var raw = localStorage.getItem('rooftakeoff_job');if (!raw) return;var job = JSON.parse(raw);if (job.imgSrc) {S.ftPerPx = job.ftPerPx;S.calibFeet = job.calibFeet;S.calib = job.calib;S.facets = job.facets || [];S.runs = job.runs || [];S.waste = job.waste || 10;S.bps = job.bps || 3;S.scaleSource = job.scaleSource;loadImage(job.imgSrc);renderFacets();renderRuns();}} catch (e) {}}$('saveJob').addEventListener('click', function() {var job = {ftPerPx: S.ftPerPx,calibFeet: S.calibFeet,calib: S.calib,facets: S.facets,runs: S.runs,waste: S.waste,bps: S.bps,scaleSource: S.scaleSource};var blob = new Blob([JSON.stringify(job, null, 2)], { type: 'application/json' });var a = document.createElement('a');a.href = URL.createObjectURL(blob);a.download = 'roof-takeoff.json';a.click();});$('openJob').addEventListener('click', function() { $('jobFile').click(); });$('jobFile').addEventListener('change', function(e) {var f = e.target.files[0];if (!f) return;var reader = new FileReader();reader.onload = function(ev) {try {var job = JSON.parse(ev.target.result);S.ftPerPx = job.ftPerPx;S.calibFeet = job.calibFeet;S.calib = job.calib;S.facets = job.facets || [];S.runs = job.runs || [];S.waste = job.waste || 10;S.bps = job.bps || 3;S.scaleSource = job.scaleSource;renderFacets();renderRuns();toast('Job loaded');} catch (err) {toast('Invalid job file', 1);}};reader.readAsText(f);});$('resetAll').addEventListener('click', function() {if (!confirm('Start over? This will clear all traced shapes.')) return;S.facets = [];S.runs = [];S.draft = [];S.calib = null;S.ftPerPx = null;S.scaleSource = null;localStorage.removeItem('rooftakeoff_job');renderFacets();renderRuns();renderTotals();draw();toast('Reset complete');});/* ══════════════════ report & print ══════════════════ */$('copyReport').addEventListener('click', function() {var t = totals();var txt = ['ROOF TAKEOFF SUMMARY','--------------------','Plan Footprint: ' + fmt(t.plan) + ' sf','Roof Surface:   ' + fmt(t.area) + ' sf (' + fmt(t.squares, 2) + ' sq)','Order Size:     ' + fmt(Math.ceil(t.squaresW * 10) / 10, 1) + ' sq (with ' + S.waste + '% waste)','Bundles:        ' + t.bundles + ' @ ' + S.bps + '/sq','','RUN LENGTHS:','Ridge:  ' + fmt(t.runs.ridge, 1) + ' ft','Eave:   ' + fmt(t.runs.eave, 1) + ' ft','Rake:   ' + fmt(t.runs.rake, 1) + ' ft','Hip:    ' + fmt(t.runs.hip, 1) + ' ft','Valley: ' + fmt(t.runs.valley, 1) + ' ft'].join('\n');navigator.clipboard.writeText(txt).then(function() {toast('Takeoff report copied to clipboard');}).catch(function() {toast('Failed to copy report', 1);});});$('printBtn').addEventListener('click', function() {window.print();});/* ══════════════════ initialization ══════════════════ */function init() {// Populate pitch selectsvar genP = $('genPitch');if (genP) genP.innerHTML = pitchOpts(6);// Set default date for shadow solvervar today = new Date().toISOString().split('T')[0];if ($('shDate'))$('shDate').value = today;resize();magBadge();renderFacets();renderRuns();loadJobLocal();}init();})();
+/* ══ view ══ */
+function toS(p){return{x:p.x*S.z+S.px,y:p.y*S.z+S.py};}
+function toI(x,y){return{x:(x-S.px)/S.z,y:(y-S.py)/S.z};}
+function fit(){
+  if(!S.img)return;
+  var r=cv.getBoundingClientRect();
+  var k=Math.min(r.width/S.img.width,r.height/S.img.height)*0.93;
+  S.z=k;S.px=(r.width-S.img.width*k)/2;S.py=(r.height-S.img.height*k)/2;draw();
+}
+function zoomAt(x,y,m){
+  var n=Math.max(0.05,Math.min(60,S.z*m));
+  S.px=x-(x-S.px)*(n/S.z);S.py=y-(y-S.py)*(n/S.z);S.z=n;draw();
+}
+function resize(){
+  var r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;
+  cv.width=Math.max(1,Math.round(r.width*d));cv.height=Math.max(1,Math.round(r.height*d));
+  ctx.setTransform(d,0,0,d,0,0);draw();
+}
+window.addEventListener('resize',resize);
+
+/* ══ snapping ══ */
+function snapPoint(p){
+  if(!S.magnet||!S.A)return p;
+  var A=S.A,a={x:p.x*A.s,y:p.y*A.s};
+  var r=Math.max(2,Math.min(18,Math.round(9/S.z*A.s))),best=null,bs=-1;
+  for(var dy=-r;dy<=r;dy++)for(var dx=-r;dx<=r;dx++){
+    var x=Math.round(a.x+dx),y=Math.round(a.y+dy);
+    if(x<1||y<1||x>=A.w-1||y>=A.h-1)continue;
+    var d=Math.hypot(dx,dy);if(d>r)continue;
+    var sc=A.mag[y*A.w+x]/A.maxMag*(1-0.45*d/r);
+    if(sc>bs){bs=sc;best={x:x,y:y};}
+  }
+  return (!best||bs<0.10)?p:{x:best.x/A.s,y:best.y/A.s};
+}
+function ortho(p){
+  var last=S.draft[S.draft.length-1],base=0;
+  if(S.draft.length>1){var pv=S.draft[S.draft.length-2];base=Math.atan2(last.y-pv.y,last.x-pv.x);}
+  var ang=Math.atan2(p.y-last.y,p.x-last.x)-base,st=Math.PI/4;
+  var sn=Math.round(ang/st)*st+base,d=dist(last,p);
+  return {x:last.x+Math.cos(sn)*d,y:last.y+Math.sin(sn)*d};
+}
+function place(p){
+  if(shift&&S.draft.length)return ortho(p);
+  return S.magnet?snapPoint(p):p;
+}
+
+/* ══ draw ══ */
+function draw(){
+  var r=cv.getBoundingClientRect();
+  ctx.clearRect(0,0,r.width,r.height);
+  if(S.img){ctx.imageSmoothingEnabled=S.z<2;ctx.drawImage(S.img,S.px,S.py,S.img.width*S.z,S.img.height*S.z);}
+  S.planes.forEach(function(f){
+    var sel=S.sel&&S.sel.t==='p'&&S.sel.id===f.id,sp=f.pts.map(toS);
+    ctx.beginPath();sp.forEach(function(p,i){i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y);});ctx.closePath();
+    ctx.fillStyle=rgba(f.color,sel?.30:.17);ctx.fill();
+    ctx.lineWidth=sel?2.6:1.8;ctx.strokeStyle=f.color;ctx.stroke();
+    sp.forEach(function(p){dot(p,f.color,sel);});
+    if(S.ftPerPx){var c=toS(centroid(f.pts));tag(c.x,c.y,f.name,fmt(fArea(f))+' sf',f.color);}
+  });
+  S.runs.forEach(function(rn){
+    var sel=S.sel&&S.sel.t==='r'&&S.sel.id===rn.id,a=toS(rn.a),b=toS(rn.b);
+    ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
+    ctx.lineWidth=sel?4:3;ctx.strokeStyle='#000';ctx.globalAlpha=.45;ctx.stroke();ctx.globalAlpha=1;
+    ctx.lineWidth=sel?2.5:1.8;ctx.strokeStyle='#D9C67A';
+    ctx.setLineDash(FLAT[rn.kind]?[]:[7,4]);ctx.stroke();ctx.setLineDash([]);
+    dot(a,'#D9C67A',sel);dot(b,'#D9C67A',sel);
+    if(S.ftPerPx)tag((a.x+b.x)/2,(a.y+b.y)/2,RUNKIND[rn.kind],fmt(runFt(rn),1)+' ft','#D9C67A');
+  });
+  if(S.calib){
+    var a=toS(S.calib.a),b=toS(S.calib.b);
+    ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
+    ctx.lineWidth=3.5;ctx.strokeStyle='#000';ctx.globalAlpha=.5;ctx.stroke();ctx.globalAlpha=1;
+    ctx.lineWidth=1.8;ctx.strokeStyle='#4FA8E8';ctx.stroke();
+    tick(a,b);tick(b,a);dot(a,'#4FA8E8',false);dot(b,'#4FA8E8',false);
+    if(S.calibFeet)tag((a.x+b.x)/2,(a.y+b.y)/2,'SCALE',fmt(S.calibFeet,2)+' ft','#4FA8E8');
+  }
+  if(S.draft.length){
+    var col=S.mode==='scale'?'#4FA8E8':S.mode==='run'?'#D9C67A':'#F2711C';
+    var pts=S.draft.slice(),live=mouseImg?place(mouseImg):null;
+    if(live)pts.push(live);
+    var sp2=pts.map(toS);
+    ctx.beginPath();sp2.forEach(function(p,i){i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y);});
+    if(S.mode==='trace'&&pts.length>2){ctx.save();ctx.closePath();ctx.fillStyle=rgba(col,.14);ctx.fill();ctx.restore();}
+    ctx.lineWidth=3;ctx.strokeStyle='#000';ctx.globalAlpha=.45;ctx.stroke();ctx.globalAlpha=1;
+    ctx.lineWidth=1.8;ctx.strokeStyle=col;ctx.stroke();
+    sp2.forEach(function(p,i){dot(p,col,i===0);});
+    for(var i=0;i<pts.length-1;i++){
+      var d=dist(pts[i],pts[i+1]);
+      seg((sp2[i].x+sp2[i+1].x)/2,(sp2[i].y+sp2[i+1].y)/2,
+        S.ftPerPx?fmt(d*S.ftPerPx,1)+"'":Math.round(d)+'px',col);
+    }
+    if(S.mode==='trace'&&S.draft.length>2){
+      var f0=toS(S.draft[0]);
+      ctx.beginPath();ctx.arc(f0.x,f0.y,9,0,6.284);
+      ctx.lineWidth=1.5;ctx.strokeStyle=col;ctx.setLineDash([3,3]);ctx.stroke();ctx.setLineDash([]);
+    }
+  }
+  if(S.scaleBar&&S.img){
+    var b1=toS({x:S.scaleBar.x1,y:S.scaleBar.y}),b2=toS({x:S.scaleBar.x2,y:S.scaleBar.y});
+    ctx.beginPath();ctx.moveTo(b1.x,b1.y);ctx.lineTo(b2.x,b2.y);
+    ctx.lineWidth=4;ctx.strokeStyle=rgba('#5FD3B2',.6);ctx.stroke();
+    dot(b1,'#5FD3B2',false);dot(b2,'#5FD3B2',false);
+  }
+  if(S.magnet&&mouseImg&&S.A&&(S.mode==='trace'||S.mode==='run'||S.mode==='scale')){
+    var sn=toS(snapPoint(mouseImg));
+    ctx.beginPath();ctx.arc(sn.x,sn.y,6,0,6.284);
+    ctx.strokeStyle=rgba('#5FD3B2',.8);ctx.lineWidth=1.2;ctx.stroke();
+  }
+  readout();
+}
+function dot(p,c,big){ctx.beginPath();ctx.arc(p.x,p.y,big?5:3.6,0,6.284);
+  ctx.fillStyle='#0f1315';ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=c;ctx.stroke();}
+function tick(a,b){var an=Math.atan2(b.y-a.y,b.x-a.x)+Math.PI/2,L=7;
+  ctx.beginPath();ctx.moveTo(a.x+Math.cos(an)*L,a.y+Math.sin(an)*L);
+  ctx.lineTo(a.x-Math.cos(an)*L,a.y-Math.sin(an)*L);
+  ctx.lineWidth=1.8;ctx.strokeStyle='#4FA8E8';ctx.stroke();}
+function tag(x,y,top,bot,c){
+  ctx.font='600 10px system-ui';var w1=ctx.measureText(top.toUpperCase()).width;
+  ctx.font='500 12px '+'ui-monospace,monospace';var w2=ctx.measureText(bot).width;
+  var w=Math.max(w1,w2)+14,h=29;
+  ctx.fillStyle='#0d1113e6';rr(x-w/2,y-h/2,w,h,4);ctx.fill();
+  ctx.strokeStyle=rgba(c,.5);ctx.lineWidth=1;rr(x-w/2,y-h/2,w,h,4);ctx.stroke();
+  ctx.textAlign='center';ctx.fillStyle=c;ctx.font='600 10px system-ui';
+  ctx.fillText(top.toUpperCase(),x,y-3);
+  ctx.fillStyle='#e9edee';ctx.font='500 12px ui-monospace,monospace';ctx.fillText(bot,x,y+10);
+  ctx.textAlign='left';
+}
+function seg(x,y,t,c){
+  ctx.font='500 11px ui-monospace,monospace';var w=ctx.measureText(t).width+10;
+  ctx.fillStyle='#0d1113e0';rr(x-w/2,y-9,w,17,3);ctx.fill();
+  ctx.fillStyle=c;ctx.textAlign='center';ctx.fillText(t,x,y+3.5);ctx.textAlign='left';
+}
+function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+function rgba(h,a){var n=parseInt(h.slice(1),16);
+  return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';}
+function fmt(n,dp){if(!isFinite(n))return '—';dp=dp===undefined?0:dp;
+  return n.toLocaleString(undefined,{minimumFractionDigits:dp,maximumFractionDigits:dp});}
+
+/* ══ guidance: always say what to do next ══ */
+function guide(){
+  var g=$('guide');
+  if(!S.img){g.className='hide';return;}
+  var msg,done=false;
+  if(!S.ftPerPx){
+    msg=S.draft.length&&S.mode==='scale'?'Click the other end of the line.':
+        S.calib?'That line is <b>'+fmt(dist(S.calib.a,S.calib.b),0)+' px</b>. Tell the panel how many feet that really is.':
+        (S.scaleBar?'Scale bar found — confirm what it reads in the panel and press <b>Use it</b>.':
+         'No scale bar in this shot. Screenshot the whole map window, or set the scale by hand.');
+  }else if(!S.planes.length){
+    msg=S.draft.length?'Keep clicking corners. <b>Enter</b> or click the first point to close.':
+        'Click the corners of the roof. Hold <b>Shift</b> to square up.';
+  }else if(!S.runs.length){
+    msg='Roof measured. Hit <b>Derive runs</b> for starter, cap and drip edge.';done=true;
+  }else{msg='Done. Check the pitch is right — it changes everything.';done=true;}
+  g.innerHTML=msg;g.className=done?'done':'';
+}
+function readout(){
+  var el=$('readout');
+  if(!S.img){el.innerHTML='';return;}
+  var h='';
+  function row(k,v,live){h+='<div class="r'+(live?' live':'')+'"><i>'+k+'</i><b>'+v+'</b></div>';}
+  if(S.draft.length){
+    var live=mouseImg?place(mouseImg):null,pts=S.draft.concat(live?[live]:[]);
+    var sg=pts.length>1?dist(pts[pts.length-2],pts[pts.length-1]):0;
+    row('segment',S.ftPerPx?fmt(sg*S.ftPerPx,2)+' ft':Math.round(sg)+' px',true);
+    if(S.mode==='trace'){
+      row('perimeter',S.ftPerPx?fmt(perim(pts,false),1)+' ft':Math.round(perim(pts,false))+' px');
+      if(pts.length>2&&S.ftPerPx)row('area',fmt(areaPx(pts)*S.ftPerPx*S.ftPerPx)+' sf');
+    }
+  }else{
+    row('scale',S.ftPerPx?fmt(S.ftPerPx*12,2)+' in/px':'not set');
+    row('zoom',Math.round(S.z*100)+'%');
+  }
+  el.innerHTML=h;
+}
+
+/* ══ rail ══ */
+function pitchOpts(sel){var h='';for(var i=0;i<=18;i++)h+='<option value="'+i+'"'+(i===sel?' selected':'')+'>'+i+'/12</option>';return h;}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function renderPlanes(){
+  var el=$('planeList');
+  el.innerHTML=S.planes.length?S.planes.map(function(f){
+    var sel=S.sel&&S.sel.t==='p'&&S.sel.id===f.id;
+    return '<div class="item'+(sel?' sel':'')+'" data-id="'+f.id+'" style="border-left-color:'+f.color+'">'+
+      '<input type="checkbox" data-a="on" '+(f.on?'checked':'')+'>'+
+      '<span class="nm">'+esc(f.name)+'</span>'+
+      '<span class="v">'+(S.ftPerPx?fmt(fArea(f))+' sf':'—')+'</span>'+
+      '<button class="x" data-a="del">×</button></div>';
+  }).join(''):'<div class="empty-t">Nothing traced. Click the roof corners, or hit <b>Auto-trace</b> and click once on the roof.</div>';
+  renderAll();
+}
+function renderRuns(){
+  var el=$('runList');
+  el.innerHTML=S.runs.length?S.runs.map(function(r){
+    var sel=S.sel&&S.sel.t==='r'&&S.sel.id===r.id;
+    return '<div class="item'+(sel?' sel':'')+'" data-id="'+r.id+'" style="border-left-color:#D9C67A">'+
+      '<select data-a="kind">'+Object.keys(RUNKIND).map(function(k){
+        return '<option value="'+k+'"'+(k===r.kind?' selected':'')+'>'+RUNKIND[k]+'</option>';}).join('')+'</select>'+
+      '<span class="v" style="margin-left:auto">'+(S.ftPerPx?fmt(runFt(r),1)+' ft':'—')+'</span>'+
+      '<button class="x" data-a="del">×</button></div>';
+  }).join(''):'<div class="empty-t">No runs yet — starter, cap, drip edge and ice-and-water need them.</div>';
+}
+function calibReadout(){
+  var el=$('calibPx');
+  if(!S.calib){el.innerHTML='';return;}
+  var px=dist(S.calib.a,S.calib.b);
+  el.innerHTML=L('Line drawn',fmt(px,0)+' px')+
+    (S.ftPerPx&&S.calibFeet?L('You said',fmt(S.calibFeet,2)+' ft')+
+      L('So one pixel is',fmt(S.ftPerPx*12,2)+' in'):'');
+}
+function renderAll(){
+  if(S.autoWaste){var w=suggestWaste();if(w!==S.waste){S.waste=w;$('waste').value=w;}}
+  var t=totals(),has=(S.ftPerPx&&onPlanes().length)||usingTyped();
+  var order=has?fmt(Math.ceil(t.sqW*10)/10,1):null;
+  $('ansSq').textContent=order||'—';$('ansSq').className=order?'':'none';
+  $('ansUnit').textContent=order?'squares':'';
+  $('ansSub').textContent=order?(fmt(t.ww)+' sf · '+S.pitch+'/12 · '+S.waste+'% waste · '+t.bundles+' bundles'):
+    (!S.img?'Paste a screenshot to start':!S.ftPerPx?'Set the scale':'Trace the roof');
+  $('topScale').textContent=S.ftPerPx?fmt(S.ftPerPx*12,2)+' in/px':'no scale';
+  $('topScale').style.color=S.ftPerPx?'var(--ink)':'var(--faint)';
+  $('n1').className='n'+(S.ftPerPx?' on':'');
+  $('n2').className='n'+(onPlanes().length?' on':'');
+  $('n3').className='n'+(has?' on':'');
+  $('t1').textContent=S.ftPerPx?fmt(S.ftPerPx*12,2)+' in/px':'';
+  $('t2').textContent=S.planes.length?(S.planes.length+' plane'+(S.planes.length>1?'s':'')+
+    (S.runs.length?' · '+S.runs.length+' runs':'')):'';
+  $('t3').textContent=S.pitch+'/12';
+  var oh=parseFloat($('overhang').value)||1,capLf=parseFloat($('capLf').value)||25;
+  var r=t.runs,cap=r.ridge+r.hip,eave=r.eave,rake=r.rake;
+  var iwW=oh*slope(S.pitch)+2,iwRows=Math.max(1,Math.ceil(iwW/2.95));
+  $('totals').innerHTML=has?[
+    L('Plan footprint',fmt(t.plan)+' sf'),
+    L('Roof surface',fmt(t.area)+' sf'),
+    L('Measured',fmt(t.sq,2)+' sq'),
+    L('With '+S.waste+'% waste',fmt(t.ww)+' sf'),
+    '<div class="hd">Order</div>',
+    L('Squares',fmt(Math.ceil(t.sqW*10)/10,1)),
+    L('Bundles @ '+S.bps+'/sq',String(t.bundles)),
+    L('Underlayment rolls',String(Math.ceil(t.sqW/10))),
+    L('Starter',eave+rake?String(Math.ceil((eave+rake)/105))+' bdl':'needs eave runs'),
+    L('Hip &amp; ridge cap',cap?String(Math.ceil(cap/capLf))+' bdl':'needs ridge runs'),
+    L('Drip edge 10 ft',eave+rake?String(Math.ceil((eave+rake)/10)):'needs runs'),
+    L('Ice &amp; water',eave?String(Math.ceil(eave*iwRows/66.7))+' rolls ('+iwRows+'×)':'needs eave runs'),
+    L('Coil nails',fmt(t.sqW*1.5,1)+' lb'),
+    (r.ridge||r.hip||r.valley||r.eave||r.rake)?'<div class="hd">Lengths</div>':'',
+    r.ridge?L('Ridge',fmt(r.ridge,1)+' ft'):'',
+    r.hip?L('Hip',fmt(r.hip,1)+' ft'):'',
+    r.valley?L('Valley',fmt(r.valley,1)+' ft'):'',
+    r.eave?L('Eave',fmt(r.eave,1)+' ft'):'',
+    r.rake?L('Rake',fmt(r.rake,1)+' ft'):''
+  ].join(''):'<div class="empty-t">Set the scale, then trace the roof.</div>';
+  calibReadout();checks();guide();
+}
+function L(k,v){return '<div class="l"><i>'+k+'</i><b>'+v+'</b></div>';}
+function checks(){
+  var c=[],t=totals();
+  function add(l,m){c.push('<div class="chk '+l+'"><div class="b"></div><div>'+m+'</div></div>');}
+  if(!S.img)add('warn','Paste a screenshot of the whole Maps window.');
+  else{
+    var mx=Math.max(S.img.width,S.img.height);
+    if(mx<600)add('bad','Image is only '+S.img.width+'×'+S.img.height+' px. Zoom in further in Maps and recapture — a roof needs several hundred pixels across.');
+    else if(mx<900)add('warn','Image is '+S.img.width+'×'+S.img.height+' px. Workable, but more detail traces cleaner.');
+    if(!S.ftPerPx)add('bad','No scale set. Nothing can be computed until there is one.');
+    else{
+      add('ok','Scale set — '+fmt(S.ftPerPx*12,2)+' in per pixel.');
+      if(S.ftPerPx>0.5)add('warn','Coarse at '+fmt(S.ftPerPx*12,1)+' in/px. Expect a few percent on areas.');
+    }
+  }
+  var bad=S.planes.filter(function(f){return selfIntersects(f.pts);});
+  if(bad.length)add('bad',bad.length+' outline crosses over itself — the area is wrong until it is fixed.');
+  if(S.ftPerPx)onPlanes().forEach(function(f){
+    var a=fPlan(f);
+    if(a<60)add('warn',f.name+' is only '+fmt(a)+' sf — likely a mis-click.');
+    if(a>6000)add('warn',f.name+' is '+fmt(a)+' sf — check the scale.');
+  });
+  if(onPlanes().length&&!S.runs.length)add('warn','No runs — starter, cap, drip edge and ice-and-water stay blank.');
+  var diag=S.runs.filter(function(r){return r.kind==='hip'||r.kind==='valley';}).length;
+  if(diag)add('warn',diag+' diagonal junction'+(diag>1?'s were':' was')+' guessed from plan shape. Confirm hip against valley.');
+  if(onPlanes().length&&S.ftPerPx)add('warn','Pitch is '+S.pitch+'/12 as entered, not measured. Verify on site.');
+  $('checks').innerHTML=c.join('')||'<div class="empty-t">Nothing to check yet.</div>';
+  var nb=c.filter(function(x){return x.indexOf('chk bad')>-1;}).length;
+  var nw=c.filter(function(x){return x.indexOf('chk warn')>-1;}).length;
+  $('chkTag').textContent=nb?nb+' blocking':nw?nw+' to review':'clear';
+}
+
+/* ══ mutations ══ */
+function addPlane(pts){
+  var id=++S.seq,n=S.planes.length;
+  S.planes.push({id:id,name:'Plane '+String.fromCharCode(65+n),pts:pts,pitch:S.pitch,on:true,
+    color:PAL[n%PAL.length]});
+  S.sel={t:'p',id:id};renderPlanes();draw();return id;
+}
+function addRun(a,b,kind){
+  var id=++S.seq;
+  S.runs.push({id:id,a:a,b:b,kind:kind||'ridge'});
+  renderRuns();renderAll();draw();return id;
+}
+function closePlane(){
+  if(S.draft.length<3){S.draft=[];draw();return;}
+  var pts=S.draft.slice();
+  if(S.autoSquare&&pts.length>=4)pts=regularize(pts,14,1.0);
+  addPlane(pts);S.draft=[];
+}
+function delSel(){
+  if(!S.sel)return;
+  if(S.sel.t==='p')S.planes=S.planes.filter(function(f){return f.id!==S.sel.id;});
+  else S.runs=S.runs.filter(function(r){return r.id!==S.sel.id;});
+  S.sel=null;renderPlanes();renderRuns();draw();
+}
+
+/* ══ derive runs — geometry, verified ══ */
+function deriveRuns(quiet){
+  var ps=onPlanes();
+  if(!ps.length){if(!quiet)toast('Trace a plane first',1);return 0;}
+  if(!S.ftPerPx){if(!quiet)toast('Set the scale first',1);return 0;}
+  var type=$('roofType').value,made=[],i,j;
+  if(ps.length===1){
+    var f=ps[0],pts=f.pts.length===4?f.pts:regularize(f.pts,25,1.5);
+    if(pts.length===4&&type!=='flat'){
+      var P=pts,l0=dist(P[0],P[1]),l1=dist(P[1],P[2]);
+      if(l1>l0){P=[P[1],P[2],P[3],P[0]];l0=dist(P[0],P[1]);l1=dist(P[1],P[2]);}
+      var u={x:(P[1].x-P[0].x)/l0,y:(P[1].y-P[0].y)/l0};
+      var v={x:(P[3].x-P[0].x)/l1,y:(P[3].y-P[0].y)/l1};
+      var at=function(a,b){return{x:P[0].x+u.x*a+v.x*b,y:P[0].y+u.y*a+v.y*b};};
+      if(type==='gable'){
+        made.push([at(0,l1/2),at(l0,l1/2),'ridge']);
+        made.push([P[0],P[1],'eave']);made.push([P[3],P[2],'eave']);
+        made.push([P[1],P[2],'rake']);made.push([P[3],P[0],'rake']);
+      }else{
+        var hh=l1/2,R0=at(hh,hh),R1=at(l0-hh,hh);
+        if(l0-l1>1)made.push([R0,R1,'ridge']);
+        made.push([P[0],P[1],'eave']);made.push([P[3],P[2],'eave']);
+        made.push([P[0],P[3],'eave']);made.push([P[1],P[2],'eave']);
+        made.push([P[0],R0,'hip']);made.push([P[3],R0,'hip']);
+        made.push([P[1],R1,'hip']);made.push([P[2],R1,'hip']);
+      }
+    }else{
+      var E1=planeEdges(f,0),bi=0;
+      for(i=1;i<E1.length;i++)if(E1[i].L>E1[bi].L)bi=i;
+      E1.forEach(function(e){
+        made.push([e.a,e.b,type==='gable'?(parallelish(e.ang,E1[bi].ang,25)?'eave':'rake'):'eave']);
+      });
+    }
+  }else{
+    var area=0;ps.forEach(function(f){area+=areaPx(f.pts);});
+    var tol=Math.max(3,Math.sqrt(area/ps.length)*0.04);
+    var E=[];ps.forEach(function(f,k){E=E.concat(planeEdges(f,k));});
+    var pairs=[];
+    for(i=0;i<E.length;i++)for(j=i+1;j<E.length;j++){
+      if(E[i].plane===E[j].plane||E[i].shared||E[j].shared)continue;
+      if(edgeOverlap(E[i],E[j],tol)>0.5){E[i].shared=true;E[j].shared=true;pairs.push(E[i]);}
+    }
+    var bnd=E.filter(function(e){return !e.shared;});
+    var axis=dominantAxis(bnd.length?bnd:E),longest=null;
+    pairs.forEach(function(e){
+      var rel=Math.abs(((e.ang-axis)*180/Math.PI%90+135)%90-45),kind;
+      if(rel<23)kind='ridge';
+      else kind=cornerConvex(e.a,bnd,ps,tol)&&cornerConvex(e.b,bnd,ps,tol)?'hip':'valley';
+      if(kind==='ridge'&&(!longest||e.L>longest.L))longest=e;
+      made.push([e.a,e.b,kind]);
+    });
+    var rd=longest?longest.ang:null;
+    if(rd===null){var bl=0;bnd.forEach(function(e){if(e.L>bl){bl=e.L;rd=e.ang;}});}
+    bnd.forEach(function(e){
+      made.push([e.a,e.b,(type!=='gable')?'eave':
+        (rd!==null&&parallelish(e.ang,rd,25)?'eave':'rake')]);
+    });
+  }
+  if(!made.length||made.length>60){if(!quiet)toast('Could not derive runs from those shapes',1);return 0;}
+  S.runs=[];
+  made.forEach(function(m){addRun(m[0],m[1],m[2]);});
+  S.sel=null;renderRuns();renderAll();draw();
+  var t=totals().runs;
+  if(!quiet)toast('Derived '+made.length+' runs · '+fmt(t.eave,0)+' ft eave, '+fmt(t.ridge+t.hip,0)+' ft cap');
+  return made.length;
+}
+
+/* ══ auto-trace ══ */
+function runWand(seed){
+  if(!S.A){toast('Image not analysed',1);return;}
+  busy(true);
+  setTimeout(function(){
+    try{
+      var r=magicWand(seed,S.tol);
+      if(!r){busy(false);toast('Nothing to grab there',1);return;}
+      if(r.count>S.A.w*S.A.h*0.42){busy(false);
+        toast('That spread over '+Math.round(r.count/(S.A.w*S.A.h)*100)+'% of the image — lower the sensitivity',1);return;}
+      var c=traceContour(r.mask,r.w,r.h);
+      if(!c){busy(false);toast('Could not read that outline',1);return;}
+      var pts;
+      if(S.autoSquare)pts=regularize(c,20,2.0);
+      else{var s=dp(c,2.2);if(s.length>3&&dist(s[0],s[s.length-1])<3)s.pop();pts=s;}
+      pts=pts.map(function(p){return{x:p.x/S.A.s,y:p.y/S.A.s};});
+      if(pts.length<3){busy(false);toast('Empty outline',1);return;}
+      addPlane(pts);busy(false);
+      toast('Traced '+pts.length+' corners'+(S.ftPerPx?' · '+fmt(fPlan(S.planes[S.planes.length-1]))+' sf':''));
+    }catch(e){busy(false);toast('Auto-trace failed there',1);}
+  },20);
+}
+
+/* ══ modes and pointer ══ */
+function setMode(m){
+  S.mode=m;S.draft=[];
+  document.querySelectorAll('.tool').forEach(function(b){b.classList.toggle('on',b.dataset.mode===m);});
+  cv.style.cursor=m==='edit'?'default':'crosshair';
+  draw();
+}
+document.querySelectorAll('.tool').forEach(function(b){
+  b.addEventListener('click',function(){setMode(b.dataset.mode);});});
+function hitVertex(sp){
+  var best=null,bd=10;
+  S.planes.forEach(function(f){f.pts.forEach(function(p,i){
+    var s=toS(p),d=Math.hypot(s.x-sp.x,s.y-sp.y);
+    if(d<bd){bd=d;best={pts:f.pts,i:i,own:{t:'p',id:f.id}};}});});
+  S.runs.forEach(function(r){['a','b'].forEach(function(k){
+    var s=toS(r[k]),d=Math.hypot(s.x-sp.x,s.y-sp.y);
+    if(d<bd){bd=d;best={o:r,k:k,own:{t:'r',id:r.id}};}});});
+  if(S.calib)['a','b'].forEach(function(k){
+    var s=toS(S.calib[k]),d=Math.hypot(s.x-sp.x,s.y-sp.y);
+    if(d<bd){bd=d;best={o:S.calib,k:k};}});
+  return best;
+}
+cv.addEventListener('pointerdown',function(e){
+  if(!S.img)return;
+  cv.setPointerCapture(e.pointerId);
+  var r=cv.getBoundingClientRect(),sx=e.clientX-r.left,sy=e.clientY-r.top,ip=toI(sx,sy);
+  if(e.button===2||e.button===1||space){drag={t:'pan',sx:sx,sy:sy,px:S.px,py:S.py};return;}
+  if(e.button!==0)return;
+  if(S.mode==='wand'){runWand(ip);return;}
+  if(!S.draft.length){
+    var hv=hitVertex({x:sx,y:sy});
+    if(hv){drag={t:'v',h:hv};if(hv.own)S.sel=hv.own;renderPlanes();renderRuns();draw();return;}
+  }
+  if(S.mode==='edit'){
+    var f=null;
+    for(var i=S.planes.length-1;i>=0;i--)if(inPoly(ip,S.planes[i].pts)){f={t:'p',id:S.planes[i].id};break;}
+    S.sel=f;renderPlanes();renderRuns();draw();return;
+  }
+  var p=place(ip);
+  if(S.mode==='scale'){
+    S.draft.push(p);
+    if(S.draft.length===2){S.calib={a:S.draft[0],b:S.draft[1]};S.draft=[];
+      $('knownLen').focus();$('knownLen').select();}
+    draw();guide();return;
+  }
+  if(S.mode==='run'){
+    S.draft.push(p);
+    if(S.draft.length===2){addRun(S.draft[0],S.draft[1],'ridge');S.draft=[];}
+    draw();return;
+  }
+  if(S.mode==='trace'){
+    if(S.draft.length>2){
+      var f0=toS(S.draft[0]);
+      if(Math.hypot(f0.x-sx,f0.y-sy)<11){closePlane();return;}
+    }
+    S.draft.push(p);draw();guide();return;
+  }
+});
+cv.addEventListener('pointermove',function(e){
+  var r=cv.getBoundingClientRect(),sx=e.clientX-r.left,sy=e.clientY-r.top;
+  mouseImg=toI(sx,sy);
+  if(drag){
+    if(drag.t==='pan'){S.px=drag.px+(sx-drag.sx);S.py=drag.py+(sy-drag.sy);}
+    else if(drag.t==='v'){
+      var h=drag.h,np=S.magnet?snapPoint(mouseImg):mouseImg;
+      if(h.o)h.o[h.k]=np;else h.pts[h.i]=np;
+      if(S.calib&&S.calibFeet)S.ftPerPx=S.calibFeet/dist(S.calib.a,S.calib.b);
+      renderAll();
+    }
+  }
+  draw();
+});
+window.addEventListener('pointerup',function(){
+  if(drag&&drag.t==='v'){renderPlanes();renderRuns();}drag=null;});
+cv.addEventListener('contextmenu',function(e){e.preventDefault();});
+cv.addEventListener('dblclick',function(){if(S.mode==='trace'&&S.draft.length>2)closePlane();});
+cv.addEventListener('wheel',function(e){
+  if(!S.img)return;e.preventDefault();
+  var r=cv.getBoundingClientRect();
+  zoomAt(e.clientX-r.left,e.clientY-r.top,e.deltaY<0?1.14:1/1.14);},{passive:false});
+window.addEventListener('keydown',function(e){
+  if(/input|select|textarea/i.test(e.target.tagName)){
+    if(e.key==='Enter'&&e.target.id==='knownLen')applyScale();
+    return;}
+  if(e.code==='Space'){space=true;cv.style.cursor='grab';e.preventDefault();}
+  if(e.key==='Shift'){shift=true;draw();}
+  var k=e.key.toLowerCase();
+  if(k==='s')setMode('scale');
+  if(k==='t')setMode('trace');
+  if(k==='a')setMode('wand');
+  if(k==='r')setMode('run');
+  if(k==='e')setMode('edit');
+  if(k==='f')fit();
+  if(e.key==='Escape'){S.draft=[];draw();guide();}
+  if(e.key==='Enter'&&S.mode==='trace')closePlane();
+  if(e.key==='Backspace'){e.preventDefault();if(S.draft.length){S.draft.pop();draw();}}
+  if(e.key==='Delete'&&S.sel)delSel();
+});
+window.addEventListener('keyup',function(e){
+  if(e.code==='Space'){space=false;cv.style.cursor=S.mode==='edit'?'default':'crosshair';}
+  if(e.key==='Shift'){shift=false;draw();}
+});
+
+/* ══ scale: read it off the map's own bar ══ */
+function detectScaleBar(img){
+  var x0=Math.floor(img.width*0.30),y0=Math.floor(img.height*0.70);
+  var w=img.width-x0,hh=img.height-y0;
+  if(w<40||hh<12)return null;
+  var c=document.createElement('canvas');c.width=w;c.height=hh;
+  var x=c.getContext('2d',{willReadFrequently:true});
+  x.drawImage(img,x0,y0,w,hh,0,0,w,hh);
+  var d;try{d=x.getImageData(0,0,w,hh).data;}catch(e){return null;}
+  function br(px,py){var i=(py*w+px)*4;return d[i]>212&&d[i+1]>212&&d[i+2]>212;}
+  function tk(px,py){var up=0,dn=0,k;
+    for(k=1;k<12&&py-k>=0;k++){if(br(px,py-k))up++;else break;}
+    for(k=1;k<12&&py+k<hh;k++){if(br(px,py+k))dn++;else break;}
+    return Math.max(up,dn);}
+  var best=null;
+  for(var y=0;y<hh;y++){
+    var p2=0;
+    while(p2<w){
+      if(!br(p2,y)){p2++;continue;}
+      var s2=p2;while(p2<w&&br(p2,y))p2++;
+      var len=p2-s2;
+      if(len<25||len>w*0.75)continue;
+      var t1=tk(s2,y),t2=tk(p2-1,y);
+      if(t1<3&&t2<3)continue;
+      var sc=len*(1+(t1>=3?1:0)+(t2>=3?1:0));
+      if(!best||sc>best.sc)best={x1:x0+s2,x2:x0+p2-1,y:y0+y,len:len,sc:sc};
+    }
+  }
+  return best;
+}
+var SBVALS=[[10,'10 ft'],[20,'20 ft'],[50,'50 ft'],[100,'100 ft'],[200,'200 ft'],[500,'500 ft'],
+  [16.404,'5 m'],[32.808,'10 m'],[65.617,'20 m'],[164.04,'50 m'],[328.08,'100 m']];
+function renderScaleBar(){
+  var box=$('sbBox'),pick=$('sbPick'),btn=$('sbApply');
+  if(!S.img){box.innerHTML='<div class="empty-t">Paste a screenshot of the <b>whole</b> Google Maps window — Ctrl+V. The scale bar in its corner is how the app gets its scale.</div>';
+    pick.style.display='none';btn.style.display='none';return;}
+  if(!S.scaleBar){
+    box.innerHTML='<div class="empty-t"><b>No scale bar found.</b> Screenshot the whole map window, including the bottom corner where Google prints it. Or set the scale by hand below.</div>';
+    pick.style.display='none';btn.style.display='none';return;}
+  box.innerHTML=L('Scale bar found',S.scaleBar.len+' px long');
+  var best=0,bd=1e9;
+  var opts=SBVALS.map(function(v,i){
+    var across=S.img.width*(v[0]/S.scaleBar.len);
+    var d=Math.abs(across-260);
+    if(d<bd){bd=d;best=i;}
+    return '<option value="'+v[0]+'">'+v[1]+' — image covers '+fmt(across)+' ft</option>';
+  });
+  $('sbVal').innerHTML=opts.join('');
+  $('sbVal').selectedIndex=best;
+  pick.style.display='';btn.style.display='';
+}
+$('sbApply').addEventListener('click',function(){
+  if(!S.scaleBar)return;
+  var ft=parseFloat($('sbVal').value);
+  S.ftPerPx=ft/S.scaleBar.len;S.calibFeet=ft;
+  renderPlanes();renderRuns();renderAll();draw();
+  toast('Scale set — '+fmt(S.ftPerPx*12,2)+' in/px. Now trace the roof.');
+  setMode('trace');
+});
+
+/* ══ scale ══ */
+function applyScale(){
+  var v=parseFloat($('knownLen').value),u=parseFloat($('knownUnit').value);
+  if(!S.calib){toast('Draw the line first',1);setMode('scale');return;}
+  if(!(v>0)){toast('Type the length of that line',1);$('knownLen').focus();return;}
+  S.calibFeet=v*u;S.ftPerPx=S.calibFeet/dist(S.calib.a,S.calib.b);
+  renderPlanes();renderRuns();renderAll();draw();
+  toast('Scale set — '+fmt(S.ftPerPx*12,2)+' in/px');
+  if(S.mode==='scale')setMode('trace');
+}
+$('applyScale').addEventListener('click',applyScale);
+
+
+/* ══ rail wiring ══ */
+$('planeList').addEventListener('click',function(e){
+  var host=e.target.closest('.item');if(!host)return;
+  var f=S.planes.filter(function(x){return x.id==host.dataset.id;})[0];if(!f)return;
+  if(e.target.dataset.a==='del'){
+    S.planes=S.planes.filter(function(x){return x.id!=host.dataset.id;});
+    S.sel=null;renderPlanes();draw();return;}
+  if(e.target.dataset.a==='on'){f.on=e.target.checked;renderAll();draw();return;}
+  S.sel={t:'p',id:f.id};renderPlanes();draw();
+});
+$('runList').addEventListener('change',function(e){
+  var host=e.target.closest('.item');if(!host)return;
+  var r=S.runs.filter(function(x){return x.id==host.dataset.id;})[0];if(!r)return;
+  if(e.target.dataset.a==='kind'){r.kind=e.target.value;renderRuns();renderAll();draw();}
+});
+$('runList').addEventListener('click',function(e){
+  var host=e.target.closest('.item');if(!host)return;
+  if(e.target.dataset.a==='del'){
+    S.runs=S.runs.filter(function(x){return x.id!=host.dataset.id;});
+    S.sel=null;renderRuns();renderAll();draw();}
+});
+$('pitch').addEventListener('change',function(e){
+  S.pitch=+e.target.value;
+  S.planes.forEach(function(f){f.pitch=S.pitch;});
+  renderPlanes();renderRuns();renderAll();draw();
+});
+$('deriveBtn').addEventListener('click',function(){deriveRuns(false);});
+$('wandBtn').addEventListener('click',function(){setMode('wand');toast('Click once on a roof plane');});
+$('squareBtn').addEventListener('click',function(){
+  var f=S.sel&&S.sel.t==='p'?S.planes.filter(function(x){return x.id===S.sel.id;})[0]:S.planes[S.planes.length-1];
+  if(!f){toast('Trace something first',1);return;}
+  f.pts=regularize(f.pts,20,1.0);renderPlanes();draw();toast('Squared up');
+});
+$('waste').addEventListener('input',function(e){S.waste=+e.target.value||0;
+  $('autoWaste').checked=false;S.autoWaste=false;renderAll();});
+$('bps').addEventListener('input',function(e){S.bps=+e.target.value||3;renderAll();});
+$('autoWaste').addEventListener('change',function(e){S.autoWaste=e.target.checked;renderAll();});
+$('magnet').addEventListener('change',function(e){S.magnet=e.target.checked;draw();});
+$('autoSquare').addEventListener('change',function(e){S.autoSquare=e.target.checked;});
+$('tol').addEventListener('input',function(e){S.tol=+e.target.value;$('tolVal').textContent=e.target.value;});
+['overhang','capLf'].forEach(function(i){$(i).addEventListener('input',renderAll);});
+
+/* ══ report ══ */
+$('copyBtn').addEventListener('click',function(){
+  var t=totals(),r=t.runs,L2=[];
+  L2.push('ROOF TAKEOFF — '+new Date().toLocaleDateString());
+  L2.push('Scale: '+(S.ftPerPx?fmt(S.ftPerPx*12,2)+' in/px':'not set')+'   Pitch: '+S.pitch+'/12');
+  L2.push('');
+  S.planes.forEach(function(f){
+    L2.push((f.on?'':'[off] ')+f.name+' — '+fmt(fPlan(f))+' sf plan -> '+fmt(fArea(f))+' sf roof');});
+  L2.push('');
+  L2.push('Plan footprint .... '+fmt(t.plan)+' sf');
+  L2.push('Roof surface ...... '+fmt(t.area)+' sf ('+fmt(t.sq,2)+' sq)');
+  L2.push('ORDER ............. '+fmt(Math.ceil(t.sqW*10)/10,1)+' squares / '+t.bundles+' bundles ('+S.waste+'% waste)');
+  if(r.ridge||r.hip||r.valley||r.eave||r.rake){
+    L2.push('');
+    if(r.ridge)L2.push('Ridge ............. '+fmt(r.ridge,1)+' ft');
+    if(r.hip)L2.push('Hip ............... '+fmt(r.hip,1)+' ft');
+    if(r.valley)L2.push('Valley ............ '+fmt(r.valley,1)+' ft');
+    if(r.eave)L2.push('Eave .............. '+fmt(r.eave,1)+' ft');
+    if(r.rake)L2.push('Rake .............. '+fmt(r.rake,1)+' ft');
+  }
+  L2.push('');
+  L2.push('Pitch entered by hand, not observed. Field-verify before ordering.');
+  var txt=L2.join('\n');
+  if(navigator.clipboard&&navigator.clipboard.writeText)
+    navigator.clipboard.writeText(txt).then(function(){toast('Takeoff copied');},function(){prompt('Copy:',txt);});
+  else prompt('Copy:',txt);
+});
+
+/* ══ job file ══ */
+function snap(){return {v:3,img:S.imgSrc,calib:S.calib,calibFeet:S.calibFeet,ftPerPx:S.ftPerPx,
+  planes:S.planes,runs:S.runs,pitch:S.pitch,waste:S.waste,bps:S.bps,seq:S.seq};}
+$('saveJob').addEventListener('click',function(){
+  if(!S.img){toast('Nothing to save',1);return;}
+  var b=new Blob([JSON.stringify(snap())],{type:'application/json'});
+  var a=document.createElement('a');a.href=URL.createObjectURL(b);
+  a.download='roof-takeoff-'+new Date().toISOString().slice(0,10)+'.json';a.click();
+  URL.revokeObjectURL(a.href);toast('Job saved');
+});
+$('openJob').addEventListener('click',function(){$('jobFile').click();});
+$('jobFile').addEventListener('change',function(e){
+  var f=e.target.files[0];if(!f)return;
+  var fr=new FileReader();
+  fr.onload=function(){
+    try{
+      var j=JSON.parse(fr.result);
+      loadImage(j.img,function(){
+        S.calib=j.calib;S.calibFeet=j.calibFeet;S.ftPerPx=j.ftPerPx;
+        S.planes=j.planes||[];S.runs=j.runs||[];S.pitch=j.pitch||6;
+        S.waste=j.waste||10;S.bps=j.bps||3;S.seq=j.seq||0;
+        $('pitch').value=S.pitch;$('waste').value=S.waste;$('bps').value=S.bps;
+        renderPlanes();renderRuns();renderAll();fit();toast('Job opened');
+      });
+    }catch(err){toast('That file could not be read',1);}
+  };
+  fr.readAsText(f);e.target.value='';
+});
+$('resetAll').addEventListener('click',function(){
+  if(!confirm('Clear the image and every measurement?'))return;
+  S.img=null;S.imgSrc=null;S.A=null;reset();$('empty').classList.remove('hide');draw();
+});
+function reset(){
+  S.planes=[];S.runs=[];S.calib=null;S.ftPerPx=null;S.calibFeet=null;S.draft=[];S.sel=null;
+  S.scaleBar=null;renderScaleBar();renderPlanes();renderRuns();renderAll();
+}
+
+/* ══ image ══ */
+function loadImage(src,cb){
+  var im=new Image();
+  im.onload=function(){
+    S.img=im;S.imgSrc=src;$('empty').classList.add('hide');
+    busy(true);
+    setTimeout(function(){
+      S.A=buildAnalysis(im);S.scaleBar=detectScaleBar(im);renderScaleBar();busy(false);fit();
+      if(cb)cb();else{setMode('scale');
+        toast(Math.max(im.width,im.height)<600?
+          ('Loaded '+im.width+'×'+im.height+' — small; zoom in further next time'):
+          ('Loaded '+im.width+'×'+im.height));}
+      renderAll();
+    },20);
+  };
+  im.onerror=function(){toast('Could not load that image',1);};
+  im.src=src;
+}
+function readFile(f){
+  if(!f||!/^image\//.test(f.type)){toast('Not an image file',1);return;}
+  var fr=new FileReader();
+  fr.onload=function(){reset();loadImage(fr.result);};
+  fr.readAsDataURL(f);
+}
+$('pick').addEventListener('click',function(){$('file').click();});
+$('file').addEventListener('change',function(e){readFile(e.target.files[0]);e.target.value='';});
+$('stage').addEventListener('dragover',function(e){e.preventDefault();});
+$('stage').addEventListener('drop',function(e){e.preventDefault();readFile(e.dataTransfer.files[0]);});
+window.addEventListener('paste',function(e){
+  var it=(e.clipboardData||{}).items||[];
+  for(var i=0;i<it.length;i++)if(/^image\//.test(it[i].type)){readFile(it[i].getAsFile());return;}
+});
+
+/* ══ chrome ══ */
+$('zIn').addEventListener('click',function(){var r=cv.getBoundingClientRect();zoomAt(r.width/2,r.height/2,1.3);});
+$('zOut').addEventListener('click',function(){var r=cv.getBoundingClientRect();zoomAt(r.width/2,r.height/2,1/1.3);});
+$('zFit').addEventListener('click',fit);
+var tEl=$('toast'),tT;
+function toast(m,err){tEl.textContent=m;tEl.className='toast show'+(err?' err':'');
+  clearTimeout(tT);tT=setTimeout(function(){tEl.className='toast';},2600);}
+function busy(on){$('busy').classList.toggle('on',!!on);}
+
+/* ══ boot ══ */
+$('pitch').innerHTML=pitchOpts(6);renderScaleBar();
+renderPlanes();renderRuns();renderAll();resize();setMode('trace');
+})();
+</script>
+</body>
+</html>
