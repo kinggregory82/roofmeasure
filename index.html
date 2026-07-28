@@ -396,7 +396,7 @@ var S={img:null,imgSrc:null,z:1,px:0,py:0,mode:'trace',ftPerPx:null,calibFeet:nu
   sun:null,           /* {alt,az} */
   shadow:{eave:null,ridge:null,run:null},
   pending:null,       /* what a line measurement is feeding */
-  ocrBox:null,geo:null,scaleSource:null};
+  ocrBox:null,geo:null,scaleSource:null,blankTiles:0,tileTotal:0};
 
 var cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 var mouseImg=null,dragging=null,spaceDown=false,shiftDown=false;
@@ -1086,7 +1086,10 @@ function renderChecks(){
   if(S.img&&S.ftPerPx){
     add('ok','Scale set — '+fmt(S.ftPerPx*12,2)+' in per pixel'+
       (S.scaleSource==='tiles'?', computed from the tile grid. Nothing to calibrate.':'.'));
-    if(S.scaleSource==='tiles')add('warn','Aerial imagery is refreshed every few years. Confirm the roof still looks like this.');
+    if(S.scaleSource==='tiles'){
+      if(S.blankTiles)add('bad','This spot has no published aerial imagery from that provider — '+S.blankTiles+' of '+S.tileTotal+
+        ' tiles came back empty. Try the USGS layer, or screenshot it from Google Maps and scale from the URL.');
+      else add('warn','Aerial imagery is refreshed every few years. Confirm the roof still looks like this.');}
     if(S.ftPerPx>0.5)add('warn','Image resolution is coarse — '+fmt(S.ftPerPx*12,1)+' in per pixel. Expect ±5% on areas.');
   }
   var bad=S.facets.filter(function(f){return selfIntersects(f.pts);});
@@ -1569,19 +1572,39 @@ function fetchImagery(g,z,spanFt,key,cb){
   var c=document.createElement('canvas');c.width=W;c.height=H;
   var x2=c.getContext('2d');
   x2.fillStyle='#1a1f22';x2.fillRect(0,0,W,H);
-  var total=(tx1-tx0+1)*(ty1-ty0+1),done=0,failed=0;
+  var total=(tx1-tx0+1)*(ty1-ty0+1),done=0,failed=0,blank=0;
   if(total>90){cb('toobig');return;}
+  /* the imagery services answer an unpublished zoom with a valid grey
+     "map data not yet available" tile, not an error — so inspect the pixels */
+  var sc=document.createElement('canvas');sc.width=32;sc.height=32;
+  var sx2=sc.getContext('2d',{willReadFrequently:true});
+  function tileIsBlank(im){
+    /* a placeholder is one flat grey across almost the whole tile; real
+       ground cover — even snow or a white roof — never is */
+    try{
+      sx2.clearRect(0,0,32,32);sx2.drawImage(im,0,0,32,32);
+      var d=sx2.getImageData(0,0,32,32).data,n=1024,i,k,bins={},best=0,bk=0;
+      for(i=0;i<d.length;i+=4){
+        k=(d[i]>>4)*256+(d[i+1]>>4)*16+(d[i+2]>>4);
+        bins[k]=(bins[k]||0)+1;
+        if(bins[k]>best){best=bins[k];bk=k;}}
+      var dr=((bk/256)|0)*16+8,dg=((((bk/16)|0)%16))*16+8,db=(bk%16)*16+8;
+      var spread=Math.max(Math.abs(dr-dg),Math.abs(dg-db),Math.abs(dr-db));
+      return best/n>0.75&&spread<=16&&(dr+dg+db)/3>170;
+    }catch(e){return false;}
+  }
   function finish(){
     if(failed===total){cb('blocked');return;}
     var url;
     try{url=c.toDataURL('image/png');}catch(e){cb('tainted');return;}
-    cb(null,{url:url,w:W,h:H,ftPerPx:ftPx,z:z,failed:failed,total:total,provider:prov.name});
+    cb(null,{url:url,w:W,h:H,ftPerPx:ftPx,z:z,failed:failed,blank:blank,total:total,provider:prov.name});
   }
   for(var ty=ty0;ty<=ty1;ty++)for(var tx=tx0;tx<=tx1;tx++){
     (function(tx,ty){
       var im=new Image();
       im.crossOrigin='anonymous';
       im.onload=function(){
+        if(tileIsBlank(im))blank++;
         try{x2.drawImage(im,tx*256-ox,ty*256-oy);}catch(e){failed++;}
         step();
       };
@@ -1609,10 +1632,10 @@ function goAddress(){
     (function attempt(zz){
     fetchImagery(g,zz,span,key,function(e2,r){
       /* imagery is not published at every zoom everywhere — step down and retry */
-      if(!e2&&r.failed>r.total*0.3&&zz>18&&tries++<3){
-        toast('No imagery at z'+zz+' here — dropping to z'+(zz-1));
+      if(!e2&&(r.failed+r.blank)>r.total*0.3&&zz>17&&tries++<4){
+        toast('Nothing published at z'+zz+' here — dropping to z'+(zz-1));
         attempt(zz-1);return;}
-      if(e2==='blocked'&&zz>18&&tries++<3){attempt(zz-1);return;}
+      if(e2==='blocked'&&zz>17&&tries++<4){attempt(zz-1);return;}
       busy(false);
       if(e2){
         var msg={toobig:'That area needs too many tiles — pick a smaller span or less detail',
@@ -1626,7 +1649,9 @@ function goAddress(){
         $('scaleTag').textContent='z'+r.z+' · '+fmt(r.ftPerPx*12,2)+' in/px';
         renderGeo(r);renderFacets();renderRuns();renderTotals();renderPitchOut();fit();
         setMode('wand');openStep('step2');
-        toast(r.failed?('Imagery loaded, '+r.failed+' of '+r.total+' tiles missing'):
+        S.blankTiles=r.blank;S.tileTotal=r.total;
+        toast((r.failed+r.blank)?
+          ('Best available here is z'+r.z+' — '+(r.failed+r.blank)+' of '+r.total+' tiles have no imagery'):
           'Scaled at '+fmt(r.ftPerPx*12,2)+' in/px — click a roof plane');
       });
     });
@@ -2014,7 +2039,7 @@ function readFile(f){
 }
 function resetMeasurements(){
   S.facets=[];S.runs=[];S.calib=null;S.ftPerPx=null;S.calibFeet=null;S.draft=[];S.sel=null;
-  S.shadow={eave:null,ridge:null,run:null};S.solvedPitch=null;S.pending=null;S.scaleSource=null;
+  S.shadow={eave:null,ridge:null,run:null};S.solvedPitch=null;S.pending=null;S.scaleSource=null;S.blankTiles=0;S.tileTotal=0;
   var st=$('statScale');st.textContent='not set';st.classList.add('off');
   $('scaleTag').textContent='';$('genTag').textContent='';
   renderFacets();renderRuns();renderTotals();renderPitchOut();
