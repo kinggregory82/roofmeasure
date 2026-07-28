@@ -1135,7 +1135,7 @@ function renderAll(){
     r.eave?L('Eave',fmt(r.eave,1)+' ft'):'',
     r.rake?L('Rake',fmt(r.rake,1)+' ft'):''
   ].join(''):'<div class="empty-t">Set the scale, then trace the roof.</div>';
-  syncPitch();calibReadout();checks();guide();
+  syncPitch();refreshScaleTarget();calibReadout();checks();guide();
 }
 function L(k,v){return '<div class="l"><i>'+k+'</i><b>'+v+'</b></div>';}
 function checks(){
@@ -1147,7 +1147,7 @@ function checks(){
     if(mx<600)add('bad','Image is only '+S.img.width+'×'+S.img.height+' px. Zoom in further in Maps and recapture — a roof needs several hundred pixels across.');
     else if(mx<900)add('warn','Image is '+S.img.width+'×'+S.img.height+' px. Workable, but more detail traces cleaner.');
     if(!S.ftPerPx)add('bad',S.scaleBar
-      ? 'Scale bar found but not read yet — none of the standard readings gave a believable building. Read it off the crop in step 1 and pick it.'
+      ? 'Scale bar found ('+S.scaleBar.len+' px) but not read yet. Read the number off the crop in step 1 and tap it — nothing can be computed until then.'
       : 'No scale set. Nothing can be computed until there is one.');
     else{
       if(S.scaleBar&&S.calibFeet){
@@ -1586,6 +1586,22 @@ function detectPin(img){
 }
 var SBVALS=[[10,'10 ft'],[20,'20 ft'],[50,'50 ft'],[100,'100 ft'],[200,'200 ft'],[500,'500 ft'],
   [16.404,'5 m'],[32.808,'10 m'],[65.617,'20 m'],[164.04,'50 m'],[328.08,'100 m']];
+/* What the "that building is X sf" figures describe. It must be the plane on screen —
+   quoting a detection candidate instead showed 207 sf for a house whose traced outline
+   works out to 1,993 sf, which made the true 50 ft reading look absurd. */
+function scaleTarget(){
+  var t=0;
+  onPlanes().forEach(function(f){var a=areaPx(f.pts);if(a>t)t=a;});
+  if(!t&&S.planes.length)S.planes.forEach(function(f){var a=areaPx(f.pts);if(a>t)t=a;});
+  if(!t&&S.cands&&S.cands.length)t=S.cands[0].areaImg;
+  return t;
+}
+var sbSig=-1;
+function refreshScaleTarget(){
+  if(!S.scaleBar||S.ftPerPx)return;
+  var sig=Math.round(scaleTarget());
+  if(sig!==sbSig){sbSig=sig;renderScaleBar();}
+}
 function renderScaleBar(){
   var box=$('sbBox'),pick=$('sbPick'),btn=$('sbApply');
   if(!S.img){box.innerHTML='<div class="empty-t">Paste a screenshot of the <b>whole</b> Google Maps window — Ctrl+V. The scale bar in its corner is how the app gets its scale.</div>';
@@ -1602,7 +1618,7 @@ function renderScaleBar(){
   sbCrop();
   /* default to whatever makes the biggest detected building a believable house,
      rather than the old guess, which quietly picked a wrong bar and scaled the whole job by it */
-  var target=(S.cands&&S.cands.length)?S.cands[0].areaImg:0;   /* cands[0] is the pinned one */
+  var target=scaleTarget();
   var best=-1,bd=1e9;
   var opts=SBVALS.map(function(v,i){
     var f=v[0]/S.scaleBar.len,across=S.img.width*f,lbl;
@@ -1798,7 +1814,7 @@ $('resetAll').addEventListener('click',function(){
 });
 function reset(){
   S.planes=[];S.runs=[];S.calib=null;S.ftPerPx=null;S.calibFeet=null;S.draft=[];S.sel=null;
-  S.scaleBar=null;S.cands=[];S.pin=null;S.scaleConfirmed=false;S.pitchSource='assumed';S.pitchMeasured=null;renderScaleBar();renderPlanes();renderRuns();renderAll();
+  S.scaleBar=null;S.cands=[];S.pin=null;S.scaleConfirmed=false;sbSig=-1;S.pitchSource='assumed';S.pitchMeasured=null;renderScaleBar();renderPlanes();renderRuns();renderAll();
 }
 
 /* ══ image ══ */
