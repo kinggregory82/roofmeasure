@@ -325,6 +325,12 @@ details.card>summary .tag.hot{color:var(--good)}
           <button class="btn ghost" id="markOpening">Mark as opening</button>
           <button class="btn ghost" id="markFootprint">Mark as footprint</button>
         </div>
+        <div class="row" style="margin-top:6px">
+          <div class="field" style="margin:0;flex:0 0 108px"><label>Roof type</label>
+            <select class="inp" id="deriveType"><option value="gable">Gable</option><option value="hip">Hip</option><option value="flat">Shed / flat</option></select></div>
+          <button class="btn auto" id="deriveBtn" style="align-self:flex-end">Derive runs</button>
+        </div>
+        <p class="note">Ridge, hip, eave and rake lengths drive starter, cap, drip edge and ice-and-water. This reads them off the shapes you already traced.</p>
       </div>
     </details>
 
@@ -363,7 +369,7 @@ details.card>summary .tag.hot{color:var(--good)}
       </div>
     </details>
 
-    <details class="card">
+    <details class="card" open>
       <summary>Materials and cost <span class="tag" id="costTag"></span></summary>
       <div class="body">
         <div class="row"><div class="field"><label>Overhang ft</label><input class="inp num" id="overhang" type="number" value="1" step="0.25"></div>
@@ -705,7 +711,12 @@ function runWand(seed){
       if(pts.length<3){busy(false);toast('Outline came back empty',1);return;}
       addFacet(pts,'plane');
       busy(false);
-      toast('Traced '+pts.length+' corners · '+(S.ftPerPx?fmt(fPlan(S.facets[S.facets.length-1]))+' sf':'set the scale to size it'));
+      var msg='Traced '+pts.length+' corners · '+(S.ftPerPx?fmt(fPlan(S.facets[S.facets.length-1]))+' sf':'set the scale to size it');
+      if(S.ftPerPx&&!S.runs.length&&planes().length===1){
+        var n=deriveRuns(true);
+        if(n)msg+=' · '+n+' runs derived as a '+$('deriveType').value;
+      }
+      toast(msg);
     }catch(e){busy(false);toast('Auto-trace failed there',1);}
   },20);
 }
@@ -1057,14 +1068,14 @@ function renderMaterials(){
   var h='';
   h+='<div class="hd">Shingles</div>';
   h+=tl('Field bundles',String(t.bundles));
-  h+=tl('Starter (eave+rake)',eave+rake?String(Math.ceil((eave+rake)/105))+' bundles':'—');
-  h+=tl('Hip &amp; ridge cap',cap?String(Math.ceil(cap/capLf))+' bundles':'—');
+  h+=tl('Starter (eave+rake)',eave+rake?String(Math.ceil((eave+rake)/105))+' bundles':'needs eave runs');
+  h+=tl('Hip &amp; ridge cap',cap?String(Math.ceil(cap/capLf))+' bundles':'needs ridge runs');
   h+='<div class="hd">Underlayment</div>';
   h+=tl('Synthetic rolls (10 sq)',String(Math.ceil(t.squaresW/10)));
-  h+=tl('Ice &amp; water — eave',iwRolls?String(iwRolls)+' rolls ('+iwRows+' course'+(iwRows>1?'s':'')+')':'—');
-  h+=tl('Ice &amp; water — valley',iwValley?String(iwValley)+' rolls':'—');
+  h+=tl('Ice &amp; water — eave',iwRolls?String(iwRolls)+' rolls ('+iwRows+' course'+(iwRows>1?'s':'')+')':'needs eave runs');
+  h+=tl('Ice &amp; water — valley',iwValley?String(iwValley)+' rolls':'no valleys');
   h+='<div class="hd">Metal and fasteners</div>';
-  h+=tl('Drip edge 10 ft',eave+rake?String(Math.ceil((eave+rake)/10)):'—');
+  h+=tl('Drip edge 10 ft',eave+rake?String(Math.ceil((eave+rake)/10)):'needs eave and rake runs');
   h+=tl('Coil nails',fmt(t.squaresW*1.5,1)+' lb');
   h+='<div class="hd">Ventilation — 1:300 balanced</div>';
   h+=tl('Required NFA',fmt(atticNfa)+' sq in');
@@ -1103,7 +1114,9 @@ function renderChecks(){
     if(a<60)add('warn',f.name+' is only '+fmt(a)+' sf — likely a mis-click.');
     if(a>6000)add('warn',f.name+' is '+fmt(a)+' sf — check the scale.');
   });
-  if(planes().length&&!S.runs.length)add('warn','No linear runs measured — no ridge cap, starter or drip edge in the material list.');
+  if(planes().length&&!S.runs.length)add('warn','No linear runs yet — starter, cap, drip edge and ice-and-water stay blank. Hit Derive runs.');
+  var diag=S.runs.filter(function(r){return r.kind==='hip'||r.kind==='valley';}).length;
+  if(diag)add('warn',diag+' diagonal junction'+(diag>1?'s were':' was')+' classified from plan shape alone. Confirm hip against valley — it changes cap and ice-and-water.');
   if(S.sun&&S.shadow.eave){
     var v=azVec(S.sun.shadowAz),m=S.shadow.eave;
     var dv={x:m.b.x-m.a.x,y:m.b.y-m.a.y},L=Math.hypot(dv.x,dv.y);
@@ -1681,6 +1694,134 @@ $('genBtn').addEventListener('click',function(){
   renderFacets();renderRuns();draw();
   toast(type==='gable'?'Gable roof built — 2 planes, 7 runs':'Hip roof built — 4 planes, 9 runs');
 });
+
+/* ══════════════════ derive linear runs from traced geometry ══════════════════ */
+function dominantAxis(edges){
+  var bins=new Float64Array(90),k,d;
+  edges.forEach(function(e){
+    var a=e.ang*180/Math.PI,m=((a%90)+90)%90;
+    bins[Math.floor(m)%90]+=e.L;});
+  var sm=new Float64Array(90);
+  for(k=0;k<90;k++)for(d=-2;d<=2;d++)sm[k]+=bins[((k+d)%90+90)%90]*(3-Math.abs(d));
+  var bi=0;for(k=1;k<90;k++)if(sm[k]>sm[bi])bi=k;
+  var num=0,den=0;
+  for(d=-3;d<=3;d++){var ix=((bi+d)%90+90)%90;num+=bins[ix]*(bi+d+0.5);den+=bins[ix];}
+  return (den?num/den:bi+0.5)*Math.PI/180;
+}
+function planeEdges(f,idx){
+  var e=[],n=f.pts.length;
+  for(var i=0;i<n;i++){
+    var a=f.pts[i],b=f.pts[(i+1)%n],L=dist(a,b);
+    if(L<1e-6)continue;
+    e.push({a:a,b:b,L:L,mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2},
+      ang:Math.atan2(b.y-a.y,b.x-a.x),plane:idx,shared:false});
+  }
+  return e;
+}
+function edgeOverlap(e1,e2,tol){
+  if(Math.abs(Math.sin(e1.ang-e2.ang))>0.26)return 0;
+  var d={x:Math.cos(e1.ang),y:Math.sin(e1.ang)};
+  if(Math.abs((e2.mid.x-e1.mid.x)*d.y-(e2.mid.y-e1.mid.y)*d.x)>tol)return 0;
+  function pr(p){return (p.x-e1.a.x)*d.x+(p.y-e1.a.y)*d.y;}
+  var t2a=pr(e2.a),t2b=pr(e2.b),lo2=Math.min(t2a,t2b),hi2=Math.max(t2a,t2b);
+  var ov=Math.min(e1.L,hi2)-Math.max(0,lo2);
+  return ov>0?ov/Math.min(e1.L,e2.L):0;
+}
+function parallelish(a1,a2,deg){
+  var s=Math.abs(Math.sin(a1-a2));
+  return s<=Math.sin(deg*Math.PI/180);
+}
+/* a corner is convex if the chord across it stays inside the roof */
+function cornerConvex(v,edges,ps,tol){
+  var inc=edges.filter(function(e){return dist(e.a,v)<tol||dist(e.b,v)<tol;});
+  if(inc.length<2)return true;
+  var pts=inc.slice(0,2).map(function(e){
+    var far=dist(e.a,v)<tol?e.b:e.a,L=dist(far,v)||1,k=Math.min(L*0.4,tol*6);
+    return {x:v.x+(far.x-v.x)/L*k,y:v.y+(far.y-v.y)/L*k};});
+  var mid={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};
+  return ps.some(function(f){return inPoly(mid,f.pts);});
+}
+function deriveRuns(quiet){
+  var ps=planes();
+  if(!ps.length){if(!quiet)toast('Trace at least one plane first',1);return 0;}
+  if(!S.ftPerPx){if(!quiet)toast('Set the scale first',1);return 0;}
+  var type=$('deriveType').value,pitch=ps[0].pitch;
+  var made=[],i,j;
+
+  /* single outline covering the whole roof — the common auto-trace result */
+  if(ps.length===1){
+    var f=ps[0],pts=f.pts.length===4?f.pts:regularize(f.pts,25,1.5);
+    if(pts.length===4&&type!=='flat'){
+      var P=pts,l0=dist(P[0],P[1]),l1=dist(P[1],P[2]);
+      if(l1>l0){P=[P[1],P[2],P[3],P[0]];l0=dist(P[0],P[1]);l1=dist(P[1],P[2]);}
+      var u={x:(P[1].x-P[0].x)/l0,y:(P[1].y-P[0].y)/l0};
+      var v={x:(P[3].x-P[0].x)/l1,y:(P[3].y-P[0].y)/l1};
+      var at=function(a,b){return{x:P[0].x+u.x*a+v.x*b,y:P[0].y+u.y*a+v.y*b};};
+      if(type==='gable'){
+        made.push([at(0,l1/2),at(l0,l1/2),'ridge','Ridge']);
+        made.push([P[0],P[1],'eave','Eave front']);made.push([P[3],P[2],'eave','Eave back']);
+        made.push([P[1],P[2],'rake','Rake end 1']);made.push([P[3],P[0],'rake','Rake end 2']);
+      }else{
+        var hh=l1/2,R0=at(hh,hh),R1=at(l0-hh,hh);
+        if(l0-l1>1)made.push([R0,R1,'ridge','Ridge']);
+        made.push([P[0],P[1],'eave','Eave front']);made.push([P[3],P[2],'eave','Eave back']);
+        made.push([P[0],P[3],'eave','Eave left']);made.push([P[1],P[2],'eave','Eave right']);
+        made.push([P[0],R0,'hip','Hip 1']);made.push([P[3],R0,'hip','Hip 2']);
+        made.push([P[1],R1,'hip','Hip 3']);made.push([P[2],R1,'hip','Hip 4']);
+      }
+    }else{
+      var E1=planeEdges(f,0),bi=0;
+      for(i=1;i<E1.length;i++)if(E1[i].L>E1[bi].L)bi=i;
+      E1.forEach(function(e,k){
+        var kind=type==='gable'?(parallelish(e.ang,E1[bi].ang,25)?'eave':'rake'):'eave';
+        made.push([e.a,e.b,kind,(kind==='eave'?'Eave ':'Rake ')+(k+1)]);
+      });
+    }
+  }else{
+    /* several planes traced — shared edges are junctions, the rest is perimeter */
+    var area=0;ps.forEach(function(f){area+=areaPx(f.pts);});
+    var tol=Math.max(3,Math.sqrt(area/ps.length)*0.04);
+    var E=[];ps.forEach(function(f,k){E=E.concat(planeEdges(f,k));});
+    var pairs=[];
+    for(i=0;i<E.length;i++)for(j=i+1;j<E.length;j++){
+      if(E[i].plane===E[j].plane)continue;
+      if(E[i].shared||E[j].shared)continue;
+      if(edgeOverlap(E[i],E[j],tol)>0.5){E[i].shared=true;E[j].shared=true;pairs.push(E[i]);}
+    }
+    var bnd=E.filter(function(e){return !e.shared;});
+    /* the ridge runs square to the building; hips and valleys cut across it.
+       take the dominant axis off the perimeter, length weighted, mod 90 */
+    var axis=dominantAxis(bnd.length?bnd:E);
+    var ridges=[],longest=null;
+    pairs.forEach(function(e,k){
+      var rel=Math.abs(((e.ang-axis)*180/Math.PI%90+135)%90-45);
+      var kind;
+      if(rel<23)kind='ridge';
+      else kind=cornerConvex(e.a,bnd,ps,tol)&&cornerConvex(e.b,bnd,ps,tol)?'hip':'valley';
+      if(kind==='ridge'){ridges.push(e);if(!longest||e.L>longest.L)longest=e;}
+      made.push([e.a,e.b,kind,(kind==='ridge'?'Ridge ':kind==='hip'?'Hip ':'Valley ')+(k+1)]);
+    });
+    var ridgeDir=longest?longest.ang:null;
+    if(ridgeDir===null){var bl=0;bnd.forEach(function(e){if(e.L>bl){bl=e.L;ridgeDir=e.ang;}});}
+    bnd.forEach(function(e,k){
+      /* on a hip or a flat roof every perimeter edge is an eave; only a gable has rakes */
+      var kind=(type!=='gable')?'eave':
+        (ridgeDir!==null&&parallelish(e.ang,ridgeDir,25)?'eave':'rake');
+      made.push([e.a,e.b,kind,(kind==='eave'?'Eave ':'Rake ')+(k+1)]);
+    });
+  }
+  if(!made.length){if(!quiet)toast('Nothing to derive from those shapes',1);return 0;}
+  if(made.length>60){if(!quiet)toast('That produced '+made.length+' runs — simplify the outlines first',1);return 0;}
+  S.runs=[];
+  made.forEach(function(m){addRun(m[0],m[1],m[2],m[3]);});
+  S.runs.forEach(function(r){r.pitch=pitch;});
+  S.sel=null;renderRuns();renderTotals();draw();
+  var t=totals().runs;
+  if(!quiet)toast('Derived '+made.length+' runs · '+fmt(t.eave,0)+' ft eave, '+
+    fmt(t.ridge+t.hip,0)+' ft cap');
+  return made.length;
+}
+$('deriveBtn').addEventListener('click',function(){deriveRuns(false);});
 
 /* ══════════════════ report ══════════════════ */
 function reportText(){
