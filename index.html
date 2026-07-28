@@ -1620,22 +1620,27 @@ function renderScaleBar(){
   pick.style.display='';btn.style.display='';
   sbQuick(target);
 }
-/* the readings worth offering first: the ones that make the building a building */
+/* Every reading Google uses, in the order it uses them. The implied footprint is
+   printed under each as information — it must never decide which ones you get to see.
+   Ranking by "which makes the building plausible" once buried the true 20 ft reading
+   in ninth place because the traced plane was a sliver. Read the crop, tap the match. */
 function sbQuick(target){
   var box=$('sbQuick');
-  var rank=SBVALS.map(function(v,i){
-    var f=v[0]/S.scaleBar.len,sf=target?target*f*f:0;
-    return {i:i,v:v[0],lbl:v[1],sf:sf,
-      d:Math.abs(Math.log((sf||1800)/1800))+(/m$/.test(v[1])?0.3:0)+((sf&&(sf<400||sf>6000))?4:0)};
-  }).sort(function(a,b){return a.d-b.d;}).slice(0,4);
+  function row(list,lbl){
+    return '<div style="font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;'+
+      'color:var(--faint);margin:8px 0 4px">'+lbl+'</div>'+
+      '<div style="display:flex;gap:4px;flex-wrap:wrap">'+list.map(function(v){
+        var f=v[0]/S.scaleBar.len,sf=target?target*f*f:0;
+        return '<button class="btn" data-ft="'+v[0]+'" style="width:auto;flex:1 1 58px;'+
+          'padding:6px 4px;line-height:1.2;font-size:11px">'+v[1]+
+          (sf?'<br><span style="font-size:9px;opacity:.62;text-transform:none;letter-spacing:0">'+
+            fmt(sf)+' sf</span>':'')+'</button>';
+      }).join('')+'</div>';
+  }
+  var ft=[],m=[];
+  SBVALS.forEach(function(v){(/m$/.test(v[1])?m:ft).push(v);});
   box.innerHTML='<div style="font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;'+
-    'color:var(--faint);margin:10px 0 5px">The bar reads</div>'+
-    '<div style="display:flex;gap:5px;flex-wrap:wrap">'+
-    rank.map(function(r){
-      return '<button class="btn go" data-ft="'+r.v+'" style="width:auto;flex:1 1 64px;padding:7px 6px;'+
-        'line-height:1.25">'+r.lbl+(r.sf?'<br><span style="font-size:9.5px;opacity:.72;'+
-        'text-transform:none;letter-spacing:0">'+fmt(r.sf)+' sf</span>':'')+'</button>';
-    }).join('')+'</div>';
+    'color:var(--faint);margin:10px 0 2px">Tap what the bar says</div>'+row(ft,'feet')+row(m,'metres');
 }
 $('sbQuick').addEventListener('click',function(e){
   var b=e.target.closest('button[data-ft]');if(!b||!S.scaleBar)return;
