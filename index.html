@@ -517,7 +517,12 @@ function magicWand(seed,tol){
   mask=morph(mask,w,h,1,3);   /* dilate */
   mask=morph(mask,w,h,0,3);   /* erode  */
   if(!mask[sy*w+sx])mask[sy*w+sx]=1;
-  return {mask:mask,w:w,h:h,sx:sx,sy:sy,count:count};
+  /* ground cover wraps the frame; a roof sits inside it */
+  var mnx=w,mxx=-1,mny=h,mxy=-1;
+  for(var yy=0;yy<h;yy++)for(var xx=0;xx<w;xx++)if(mask[yy*w+xx]){
+    if(xx<mnx)mnx=xx;if(xx>mxx)mxx=xx;if(yy<mny)mny=yy;if(yy>mxy)mxy=yy;}
+  var borders=(mnx<=1?1:0)+(mxx>=w-2?1:0)+(mny<=1?1:0)+(mxy>=h-2?1:0);
+  return {mask:mask,w:w,h:h,sx:sx,sy:sy,count:count,borders:borders,frac:count/(w*h)};
 }
 function morph(m,w,h,dilate,k){
   var o=new Uint8Array(w*h),r=(k-1)/2;
@@ -669,9 +674,12 @@ function runWand(seed){
     try{
       var r=magicWand(seed,S.tol);
       if(!r){busy(false);toast('Nothing to grab there — try another spot',1);return;}
-      if(r.count>S.A.w*S.A.h*0.42){
+      /* ground cover runs off the edges of the frame; a building sits inside it */
+      if(r.borders>=3||r.frac>0.60){
         busy(false);
-        toast('That spread across '+Math.round(r.count/(S.A.w*S.A.h)*100)+'% of the image — lower the sensitivity',1);
+        toast(r.borders>=3?
+          'That ran off '+r.borders+' edges of the image — that reads as ground cover, not a roof. If it really is the roof, widen "Across" in step 1.':
+          'That filled '+Math.round(r.frac*100)+'% of the image — click on the roof surface itself',1);
         return;}
       var c=traceContour(r.mask,r.w,r.h);
       if(!c){busy(false);toast('Could not read that outline',1);return;}
@@ -684,6 +692,9 @@ function runWand(seed){
         pts=simp.map(fromA);
       }
       if(pts.length<3){busy(false);toast('Outline came back empty',1);return;}
+      if(pts.length>32){busy(false);
+        toast('That outline came back with '+pts.length+' corners — no roof plane looks like that. Click on the roof, or lower the sensitivity.',1);
+        return;}
       addFacet(pts,'plane');
       busy(false);
       var msg='Traced '+pts.length+' corners · '+(S.ftPerPx?fmt(fPlan(S.facets[S.facets.length-1]))+' sf':'set the scale to size it');
