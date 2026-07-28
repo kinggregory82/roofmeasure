@@ -76,6 +76,24 @@ button,select,input{font-family:inherit;color:inherit}
 #magbadge.on{display:flex}
 #magbadge .dot{width:6px;height:6px;border-radius:50%;background:var(--good)}
 
+#answer{position:sticky;top:0;z-index:5;background:var(--sunk);border-bottom:1px solid var(--line);
+  padding:12px 14px 11px;cursor:pointer}
+#answer .k{font-family:var(--cond);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint)}
+#answer .v{display:flex;align-items:baseline;gap:8px;margin-top:2px}
+#answer .v b{font-family:var(--mono);font-size:31px;font-weight:600;color:var(--good);line-height:1}
+#answer .v b.none{color:var(--faint);font-size:20px}
+#answer .v span{font-family:var(--cond);font-size:14px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+#answer .sub{margin-top:5px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+details.step>summary{padding:12px 14px 11px}
+details.step>summary::before{display:none}
+details.step>summary .n{font-family:var(--mono);font-size:11px;width:19px;height:19px;flex:none;
+  border:1px solid var(--line);border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--faint)}
+details.step[open]>summary .n{background:var(--chalk);border-color:var(--chalk);color:#08121a;font-weight:600}
+details.step[open]>summary{color:var(--ink)}
+details.step>summary .tag{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sub-h{font-family:var(--cond);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);
+  padding:14px 0 7px;border-top:1px solid var(--line-soft);margin-top:12px}
+.sub-h:first-child{border-top:0;margin-top:0;padding-top:0}
 #rail{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;overscroll-behavior:contain}
 details.card{border-bottom:1px solid var(--line)}
 details.card>summary{list-style:none;cursor:pointer;padding:11px 14px 9px;display:flex;align-items:center;gap:8px;
@@ -209,95 +227,84 @@ details.card>summary .tag.hot{color:var(--good)}
 
   <aside id="rail">
 
-    <details class="card" open>
-      <summary>Address <span class="tag" id="geoTag"></span></summary>
+    <div id="answer">
+      <div class="k">Order</div>
+      <div class="v"><b id="ansSq" class="none">—</b><span id="ansUnit"></span></div>
+      <div class="sub" id="ansSub">Start with an address or an image</div>
+    </div>
+
+    <details class="card step" id="step1" open>
+      <summary><span class="n">1</span>Site and scale <span class="tag" id="s1tag">start here</span></summary>
       <div class="body">
-        <div class="field">
-          <label>Street address or lat, lng</label>
-          <input class="inp" id="addr" placeholder="1247 N Van Dyke Rd, Bad Axe MI">
-        </div>
+        <div class="sub-h">By address — arrives pre-scaled</div>
+        <div class="field"><label>Street address or lat, lng</label>
+          <input class="inp" id="addr" placeholder="1247 N Van Dyke Rd, Bad Axe MI"></div>
         <div class="row" style="margin-bottom:9px">
           <div class="field" style="margin:0"><label>Imagery</label>
-            <select class="inp" id="tileSrc">
-              <option value="esri">Esri World Imagery</option>
-              <option value="usgs">USGS (US only)</option>
-            </select></div>
-          <div class="field" style="flex:0 0 84px;margin:0"><label>Detail</label>
-            <select class="inp" id="tileZ">
-              <option value="19">z19 — coarsest</option>
-              <option value="20">z20</option>
-              <option value="21" selected>z21 — finest</option>
-            </select></div>
+            <select class="inp" id="tileSrc"><option value="esri">Esri World</option><option value="usgs">USGS (US)</option></select></div>
+          <div class="field" style="flex:0 0 76px;margin:0"><label>Detail</label>
+            <select class="inp" id="tileZ"><option value="19">z19</option><option value="20">z20</option><option value="21" selected>z21</option></select></div>
+          <div class="field" style="flex:0 0 76px;margin:0"><label>Across</label>
+            <select class="inp" id="tileSpan"><option value="150">150ft</option><option value="250" selected>250ft</option><option value="400">400ft</option><option value="700">700ft</option></select></div>
         </div>
-        <div class="field"><label>Area across</label>
-          <select class="inp" id="tileSpan">
-            <option value="150">150 ft — one house</option>
-            <option value="250" selected>250 ft — house and outbuildings</option>
-            <option value="400">400 ft — whole parcel</option>
-            <option value="700">700 ft — commercial</option>
-          </select></div>
         <button class="btn auto" id="geoGo">Find it and pull the imagery</button>
         <div class="tot" id="geoOut" style="margin-top:8px"></div>
-        <p class="note">Imagery pulled this way arrives already scaled — there is nothing to calibrate. The catch is that it needs an internet connection, and the imagery may be a few years old, so a recent addition might not be on it.</p>
-      </div>
-    </details>
 
-    <details class="card" open>
-      <summary>Scale <span class="tag" id="scaleTag"></span></summary>
-      <div class="body">
-        <div class="field">
-          <label>Auto — paste the map URL</label>
-          <input class="inp" id="mapUrl" placeholder="https://www.google.com/maps/@43.80,-83.00,20z/…">
-        </div>
+        <div class="sub-h">Or scale your own screenshot</div>
+        <div class="field"><label>Paste the map URL</label>
+          <input class="inp" id="mapUrl" placeholder="https://www.google.com/maps/@43.80,-83.00,20z/…"></div>
         <div class="row" style="margin-bottom:9px">
-          <div class="field" style="margin:0"><label>Screen capture</label>
-            <select class="inp" id="capScale">
-              <option value="1">1× standard</option>
-              <option value="2">2× retina / HiDPI</option>
-              <option value="3">3× phone</option>
-            </select></div>
-          <div class="field" style="margin:0"><label>Image cropped?</label>
-            <select class="inp" id="cropMode"><option value="1">no resize</option><option value="0">resized — can't use</option></select></div>
+          <div class="field" style="margin:0"><label>Capture</label>
+            <select class="inp" id="capScale"><option value="1">1× standard</option><option value="2">2× retina</option><option value="3">3× phone</option></select></div>
+          <div class="field" style="margin:0"><label>Resized?</label>
+            <select class="inp" id="cropMode"><option value="1">no</option><option value="0">yes</option></select></div>
         </div>
-        <button class="btn auto" id="scaleFromUrl">Set scale from map URL</button>
-
-        <div class="note" style="margin:12px 0 7px"><b>Or</b> measure a known distance:</div>
-        <div class="row">
+        <button class="btn" id="scaleFromUrl">Set scale from map URL</button>
+        <div class="row" style="margin-top:9px">
           <div class="field"><label>Known length</label><input class="inp num" id="knownLen" type="number" step="0.01" placeholder="53.48"></div>
-          <div class="field" style="flex:0 0 80px"><label>Units</label>
+          <div class="field" style="flex:0 0 66px"><label>Units</label>
             <select class="inp" id="knownUnit"><option value="1">ft</option><option value="3.280839895">m</option><option value="0.0833333">in</option></select></div>
         </div>
-        <button class="btn primary" id="applyScale">Apply to drawn line</button>
-        <button class="btn ghost" id="ocrBtn" style="margin-top:7px">Read the label off the image</button>
-        <p class="note" id="ocrNote">Reading the label downloads a text-recognition engine the first time. Draw a box around the map's distance text and it fills the field in.</p>
+        <button class="btn" id="applyScale">Apply to drawn line</button>
+        <button class="btn ghost" id="ocrBtn" style="margin-top:6px">Read the label off the image</button>
+        <p class="note" id="ocrNote">Address imagery needs no calibration. For your own screenshot, the map URL sets the scale from its zoom level, or measure something you know.</p>
       </div>
     </details>
 
-    <details class="card" open>
-      <summary>Detection <span class="tag hot" id="detTag">ready</span></summary>
+    <details class="card step" id="step2">
+      <summary><span class="n">2</span>Trace the roof <span class="tag" id="s2tag"></span></summary>
       <div class="body">
-        <label class="sw"><input type="checkbox" id="magnet" checked> Magnetic edges — pull each click onto the roof line</label>
-        <label class="sw"><input type="checkbox" id="autoSquare" checked> Square up automatically after tracing</label>
-        <div class="field" style="margin-top:8px"><label>Auto-trace sensitivity <span class="num" id="tolVal">30</span></label>
-          <input type="range" id="tol" min="8" max="80" value="30" style="width:100%;accent-color:var(--good)"></div>
         <div class="row">
           <button class="btn auto" id="wandBtn">Auto-trace a plane</button>
-          <button class="btn ghost" id="squareBtn">Square up</button>
+          <button class="btn ghost" id="squareBtn" style="flex:0 0 96px">Square up</button>
         </div>
-        <p class="note">Auto-trace grows a region from wherever you click and turns its outline into a clean, right-angled polygon. If it grabs too much, drop the sensitivity.</p>
+        <div class="facets" id="facetList" style="margin-top:10px"></div>
+        <div class="row" style="margin-top:8px">
+          <div class="field" style="margin:0;flex:0 0 106px"><label>Roof type</label>
+            <select class="inp" id="deriveType"><option value="gable">Gable</option><option value="hip">Hip</option><option value="flat">Shed / flat</option></select></div>
+          <button class="btn auto" id="deriveBtn" style="align-self:flex-end">Derive runs</button>
+        </div>
+        <div class="facets" id="runList" style="margin-top:9px"></div>
+        <button class="btn" id="toTakeoff" style="margin-top:10px">Done — show the takeoff</button>
+        <p class="note">Ridge, hip, eave and rake lengths drive starter, cap, drip edge and ice-and-water. Derive reads them off the shapes you traced.</p>
       </div>
     </details>
 
-    <details class="card">
-      <summary>Pitch from shadow <span class="tag" id="sunTag"></span></summary>
+    <details class="card step" id="step3">
+      <summary><span class="n">3</span>Pitch <span class="tag" id="s3tag"></span></summary>
       <div class="body">
+        <div class="field"><label>Pitch for the whole roof</label>
+          <select class="inp" id="masterPitch"></select></div>
+        <p class="note" style="margin-top:0">A single plane can be overridden in its own row above. Pitch cannot be read from straight overhead — measure it, or solve it from a shadow.</p>
+
+        <div class="sub-h">Solve it from a shadow</div>
         <div class="row">
           <div class="field"><label>Image date</label><input class="inp" id="shDate" type="date"></div>
-          <div class="field" style="flex:0 0 96px"><label>Local time</label><input class="inp" id="shTime" type="time" value="12:00"></div>
+          <div class="field" style="flex:0 0 92px"><label>Local time</label><input class="inp" id="shTime" type="time" value="12:00"></div>
         </div>
         <div class="row">
-          <div class="field"><label>Latitude</label><input class="inp num" id="shLat" type="number" step="0.0001" placeholder="43.80"></div>
-          <div class="field"><label>Longitude</label><input class="inp num" id="shLng" type="number" step="0.0001" placeholder="-83.00"></div>
+          <div class="field"><label>Latitude</label><input class="inp num" id="shLat" type="number" step="0.0001"></div>
+          <div class="field"><label>Longitude</label><input class="inp num" id="shLng" type="number" step="0.0001"></div>
         </div>
         <div class="row">
           <div class="field"><label>UTC offset</label><input class="inp num" id="shTz" type="number" step="0.5" value="-4"></div>
@@ -308,99 +315,67 @@ details.card>summary .tag.hot{color:var(--good)}
         <button class="btn" id="shRidge" style="margin-top:6px">2 · Measure ridge shadow</button>
         <button class="btn" id="shRun" style="margin-top:6px">3 · Measure eave-to-ridge run</button>
         <div class="tot" id="pitchOut" style="margin-top:10px"></div>
-        <button class="btn auto" id="applyPitch" style="margin-top:8px" disabled>Apply pitch to all planes</button>
-        <p class="note">Each measurement locks to the computed sun ray, so you only have to find where the shadow ends. Works best on long shadows — morning or late-afternoon imagery.</p>
+        <button class="btn auto" id="applyPitch" style="margin-top:8px" disabled>Apply solved pitch</button>
       </div>
     </details>
 
-    <details class="card" open>
-      <summary>Roof planes <span class="tag" id="facetTag">0</span></summary>
+    <details class="card step" id="step4">
+      <summary><span class="n">4</span>Takeoff <span class="tag" id="s4tag"></span></summary>
       <div class="body">
-        <div class="facets" id="facetList"></div>
-        <div class="row" style="margin-top:10px">
-          <button class="btn ghost" id="dupFacet">Duplicate</button>
-          <button class="btn ghost" id="mirrorFacet">Set all pitches</button>
-        </div>
-        <div class="row" style="margin-top:6px">
-          <button class="btn ghost" id="markOpening">Mark as opening</button>
-          <button class="btn ghost" id="markFootprint">Mark as footprint</button>
-        </div>
-        <div class="row" style="margin-top:6px">
-          <div class="field" style="margin:0;flex:0 0 108px"><label>Roof type</label>
-            <select class="inp" id="deriveType"><option value="gable">Gable</option><option value="hip">Hip</option><option value="flat">Shed / flat</option></select></div>
-          <button class="btn auto" id="deriveBtn" style="align-self:flex-end">Derive runs</button>
-        </div>
-        <p class="note">Ridge, hip, eave and rake lengths drive starter, cap, drip edge and ice-and-water. This reads them off the shapes you already traced.</p>
-      </div>
-    </details>
-
-    <details class="card">
-      <summary>Generate from footprint <span class="tag" id="genTag"></span></summary>
-      <div class="body">
-        <div class="row">
-          <div class="field"><label>Roof type</label>
-            <select class="inp" id="genType"><option value="gable">Gable</option><option value="hip">Hip</option></select></div>
-          <div class="field" style="flex:0 0 92px"><label>Pitch</label><select class="inp" id="genPitch"></select></div>
-        </div>
-        <button class="btn auto" id="genBtn">Build planes and runs</button>
-        <p class="note">Trace the building outline, mark it as the footprint, and this lays out every plane, ridge, hip, rake and eave with exact lengths. Rectangles only — traced shapes get squared to four corners first.</p>
-      </div>
-    </details>
-
-    <details class="card">
-      <summary>Linear runs <span class="tag" id="runTag">0</span></summary>
-      <div class="body"><div class="facets" id="runList"></div>
-        <p class="note">Ridge and eave measure true from overhead. Rakes, hips and valleys are foreshortened — the pitch correction is applied automatically by type.</p></div>
-    </details>
-
-    <details class="card" open>
-      <summary>Takeoff <span class="tag" id="wasteTag"></span></summary>
-      <div class="body">
-        <div class="row" style="margin-bottom:10px">
-          <div class="field" style="margin:0"><label>Waste %</label><input class="inp num" id="waste" type="number" value="10" min="0" max="40" step="1"></div>
-          <div class="field" style="margin:0"><label>Bundles / sq</label><input class="inp num" id="bps" type="number" value="3" min="1" max="6" step="1"></div>
-        </div>
-        <label class="sw"><input type="checkbox" id="autoWaste" checked> Set waste automatically from roof complexity</label>
-        <div class="tot" id="totals" style="margin-top:6px"></div>
+        <div class="tot" id="totals"></div>
         <div class="row" style="margin-top:12px">
           <button class="btn" id="copyReport">Copy takeoff</button>
-          <button class="btn ghost" id="printBtn">Print</button>
+          <button class="btn ghost" id="printBtn" style="flex:0 0 74px">Print</button>
         </div>
-      </div>
-    </details>
-
-    <details class="card" open>
-      <summary>Materials and cost <span class="tag" id="costTag"></span></summary>
-      <div class="body">
-        <div class="row"><div class="field"><label>Overhang ft</label><input class="inp num" id="overhang" type="number" value="1" step="0.25"></div>
-          <div class="field"><label>Cap lf / bundle</label><input class="inp num" id="capLf" type="number" value="25" step="1"></div></div>
-        <div class="row"><div class="field"><label>$ / square</label><input class="inp num" id="pSq" type="number" value="0" step="1"></div>
-          <div class="field"><label>$ / labor sq</label><input class="inp num" id="pLab" type="number" value="0" step="1"></div></div>
+        <div class="sub-h">Materials <span class="tag" id="costTag"></span></div>
         <div class="tot" id="materials"></div>
+        <div class="sub-h">Checks <span class="tag" id="chkTag"></span></div>
+        <div id="checks"></div>
       </div>
-    </details>
-
-    <details class="card" open>
-      <summary>Checks <span class="tag" id="chkTag"></span></summary>
-      <div class="body"><div id="checks"></div></div>
     </details>
 
     <details class="card">
-      <summary>Job file <span class="tag" id="saveTag"></span></summary>
+      <summary>Settings <span class="tag" id="saveTag"></span></summary>
       <div class="body">
+        <div class="sub-h">Waste and coverage</div>
+        <div class="row"><div class="field"><label>Waste %</label><input class="inp num" id="waste" type="number" value="10" min="0" max="40"></div>
+          <div class="field"><label>Bundles / sq</label><input class="inp num" id="bps" type="number" value="3" min="1" max="6"></div></div>
+        <label class="sw"><input type="checkbox" id="autoWaste" checked> Set waste from roof complexity <span class="tag" id="wasteTag"></span></label>
+        <div class="row" style="margin-top:8px"><div class="field"><label>Overhang ft</label><input class="inp num" id="overhang" type="number" value="1" step="0.25"></div>
+          <div class="field"><label>Cap lf / bundle</label><input class="inp num" id="capLf" type="number" value="25"></div></div>
+        <div class="row"><div class="field"><label>$ / square</label><input class="inp num" id="pSq" type="number" value="0"></div>
+          <div class="field"><label>$ / labor sq</label><input class="inp num" id="pLab" type="number" value="0"></div></div>
+
+        <div class="sub-h">Detection <span class="tag" id="detTag"></span></div>
+        <label class="sw"><input type="checkbox" id="magnet" checked> Magnetic edges — pull clicks onto roof lines</label>
+        <label class="sw"><input type="checkbox" id="autoSquare" checked> Square up automatically after tracing</label>
+        <div class="field" style="margin-top:6px"><label>Auto-trace sensitivity <span class="num" id="tolVal">30</span></label>
+          <input type="range" id="tol" min="8" max="80" value="30" style="width:100%;accent-color:var(--good)"></div>
+
+        <div class="sub-h">Build planes from a footprint <span class="tag" id="genTag"></span></div>
+        <div class="row"><div class="field"><label>Shape</label>
+            <select class="inp" id="genType"><option value="gable">Gable</option><option value="hip">Hip</option></select></div>
+          <div class="field" style="flex:0 0 86px"><label>Pitch</label><select class="inp" id="genPitch"></select></div></div>
+        <div class="row"><button class="btn ghost" id="markFootprint">Mark as footprint</button>
+          <button class="btn ghost" id="genBtn">Build planes</button></div>
+        <div class="row" style="margin-top:6px"><button class="btn ghost" id="dupFacet">Duplicate plane</button>
+          <button class="btn ghost" id="markOpening">Mark as opening</button></div>
+
+        <div class="sub-h">Job file</div>
         <div class="row"><button class="btn ghost" id="saveJob">Save job</button><button class="btn ghost" id="openJob">Open job</button></div>
         <input type="file" id="jobFile" accept=".json,application/json" hidden>
-        <label class="sw" style="margin-top:8px"><input type="checkbox" id="autosave" checked> Keep working automatically — reopen where you left off</label>
+        <label class="sw" style="margin-top:6px"><input type="checkbox" id="autosave" checked> Reopen where you left off</label>
         <button class="btn ghost" id="resetAll" style="margin-top:6px">Start over</button>
+
+        <div class="sub-h">Keys</div>
+        <p class="note" style="margin:0"><b>C</b> scale · <b>A</b> auto-trace · <b>T</b> trace · <b>L</b> run · <b>V</b> edit ·
+          <b>Enter</b> close · <b>Esc</b> cancel · <b>Backspace</b> undo point · <b>Shift</b> square · <b>M</b> magnet ·
+          <b>Space-drag</b> pan · <b>Scroll</b> zoom · <b>Del</b> delete</p>
       </div>
     </details>
 
-    <details class="card">
-      <summary>Keys</summary>
-      <div class="body"><p class="note" style="margin:0"><b>C</b> scale · <b>A</b> auto-trace · <b>T</b> trace · <b>L</b> run · <b>V</b> edit ·
-        <b>Enter</b> close · <b>Esc</b> cancel · <b>Backspace</b> undo point · <b>Shift</b> square · <b>M</b> magnet ·
-        <b>Space-drag</b> pan · <b>Scroll</b> zoom · <b>Del</b> delete</p></div>
-    </details>
+    <div id="scaleTag" hidden></div><div id="facetTag" hidden></div><div id="runTag" hidden></div>
+    <div id="geoTag" hidden></div><div id="sunTag" hidden></div>
   </aside>
 </div>
 <div class="toast" id="toast"></div>
@@ -1046,7 +1021,7 @@ function renderTotals(){
   $('statFacets').textContent=String(planes().length);
   $('facetTag').textContent=String(S.facets.length);
   $('runTag').textContent=String(S.runs.length);
-  renderMaterials();renderChecks();scheduleSave();
+  renderMaterials();renderChecks();renderSteps();scheduleSave();
 }
 function renderMaterials(){
   var t=totals(),el=$('materials');
@@ -1135,6 +1110,45 @@ function renderChecks(){
   $('chkTag').className='tag'+(nb||nw?'':' hot');
 }
 
+/* ══════════════════ step accordion and the answer strip ══════════════════ */
+function openStep(id){
+  var d=$(id);if(!d||d.open)return;
+  d.open=true;
+  if(d.scrollIntoView)d.scrollIntoView({block:'nearest'});
+}
+document.querySelectorAll('#rail details.step').forEach(function(d){
+  d.addEventListener('toggle',function(){
+    if(!d.open)return;
+    document.querySelectorAll('#rail details.step').forEach(function(o){if(o!==d)o.open=false;});
+  });
+});
+$('answer').addEventListener('click',function(){openStep('step4');});
+$('toTakeoff').addEventListener('click',function(){openStep('step4');});
+function pitchSummary(){
+  var ps=planes();
+  if(!ps.length)return null;
+  var first=ps[0].pitch,same=ps.every(function(f){return f.pitch===first;});
+  return same?first+'/12':'mixed';
+}
+function renderSteps(){
+  var t=totals(),has=S.ftPerPx&&planes().length;
+  var order=has?fmt(Math.ceil(t.squaresW*10)/10,1):null;
+  $('ansSq').textContent=order||'—';
+  $('ansSq').className=order?'':'none';
+  $('ansUnit').textContent=order?'squares':'';
+  $('ansSub').textContent=order?
+    (fmt(t.withWaste)+' sf · '+(pitchSummary()||'—')+' · '+S.waste+'% waste · '+t.bundles+' bundles'):
+    (!S.img?'Start with an address or an image':
+     !S.ftPerPx?'Scale is not set yet':'Trace a roof plane');
+
+  $('s1tag').textContent=S.geo?String(S.geo.label).split(',')[0]:
+    S.ftPerPx?fmt(S.ftPerPx*12,2)+' in/px':'start here';
+  var np=planes().length;
+  $('s2tag').textContent=np?(np+' plane'+(np>1?'s':'')+(S.runs.length?' · '+S.runs.length+' runs':' · no runs')):
+    (S.img?'nothing traced':'');
+  $('s3tag').textContent=pitchSummary()||'';
+  $('s4tag').textContent=order?order+' sq':'';
+}
 /* ══════════════════ rail rendering ══════════════════ */
 function pitchGlyph(r){
   var W=30,H=19,ri=Math.min(H-4,(r/12)*(W-4));
@@ -1161,6 +1175,10 @@ function renderFacets(){
         '<span class="sf num" style="margin-left:auto">'+(f.kind==='footprint'?f.pts.length+' corners':'×'+slope(f.pitch).toFixed(3))+'</span>'+
       '</div></div>';
   }).join('');
+  var mp=$('masterPitch'),ps=planes();
+  if(ps.length){var first=ps[0].pitch,same=ps.every(function(f){return f.pitch===first;});
+    mp.value=String(same?first:first);mp.disabled=false;}
+  else mp.disabled=true;
   renderTotals();
 }
 function renderRuns(){
@@ -1391,12 +1409,6 @@ $('dupFacet').addEventListener('click',function(){
   S.facets[S.facets.length-1].pitch=f.pitch;
   renderFacets();draw();
 });
-$('mirrorFacet').addEventListener('click',function(){
-  var f=selFacet();if(!f){toast('Select a plane first',1);return;}
-  planes().forEach(function(p){p.pitch=f.pitch;});
-  S.runs.forEach(function(r){r.pitch=f.pitch;});
-  renderFacets();renderRuns();draw();toast('All planes set to '+f.pitch+'/12');
-});
 $('markOpening').addEventListener('click',function(){
   var f=selFacet();if(!f){toast('Select a shape first',1);return;}
   f.kind=f.kind==='opening'?'plane':'opening';
@@ -1408,6 +1420,12 @@ $('markFootprint').addEventListener('click',function(){
   S.facets.forEach(function(x){if(x.kind==='footprint')x.kind='plane';});
   f.kind='footprint';f.name='Footprint';
   renderFacets();draw();$('genTag').textContent=f.pts.length+' corners';
+});
+$('masterPitch').addEventListener('change',function(e){
+  var v=+e.target.value;
+  planes().forEach(function(f){f.pitch=v;});
+  S.runs.forEach(function(r){r.pitch=v;});
+  renderFacets();renderRuns();draw();
 });
 $('waste').addEventListener('input',function(e){S.waste=+e.target.value||0;$('autoWaste').checked=false;S.autoWaste=false;renderTotals();});
 $('bps').addEventListener('input',function(e){S.bps=+e.target.value||3;renderTotals();});
@@ -1451,6 +1469,7 @@ function setScale(feet,pixels){
   var st=$('statScale');st.textContent=fmt(1/S.ftPerPx,2)+' px/ft';st.classList.remove('off');
   $('scaleTag').textContent=fmt(feet,2)+' ft reference';
   renderFacets();renderRuns();renderTotals();renderPitchOut();draw();toast('Scale set');
+  openStep('step2');
 }
 function scaleFromUrl(){
   var u=$('mapUrl').value.trim();
@@ -1590,7 +1609,7 @@ function goAddress(){
         var st=$('statScale');st.textContent=fmt(1/S.ftPerPx,2)+' px/ft';st.classList.remove('off');
         $('scaleTag').textContent='z'+r.z+' · '+fmt(r.ftPerPx*12,2)+' in/px';
         renderGeo(r);renderFacets();renderRuns();renderTotals();renderPitchOut();fit();
-        setMode('wand');
+        setMode('wand');openStep('step2');
         toast(r.failed?('Imagery loaded, '+r.failed+' of '+r.total+' tiles missing'):
           'Scaled at '+fmt(r.ftPerPx*12,2)+' in/px — click a roof plane');
       });
@@ -1656,7 +1675,7 @@ function loadTesseract(cb){
 }
 
 /* ══════════════════ generate from footprint ══════════════════ */
-(function(){var s=$('genPitch');s.innerHTML=pitchOpts(6);})();
+(function(){$('genPitch').innerHTML=pitchOpts(6);$('masterPitch').innerHTML=pitchOpts(6);})();
 $('genBtn').addEventListener('click',function(){
   var fp=footprint();
   if(!fp){toast('Trace the building outline and mark it as the footprint',1);return;}
@@ -2018,7 +2037,7 @@ function busy(on,msg){
   var d=new Date();
   $('shDate').value=d.toISOString().slice(0,10);
   $('shTz').value=Math.round(-d.getTimezoneOffset()/60*2)/2;
-  renderFacets();renderRuns();renderTotals();renderPitchOut();resize();setMode('trace');
+  renderFacets();renderRuns();renderTotals();renderPitchOut();renderSteps();resize();setMode('trace');
   tryRestore();
 })();
 })();
