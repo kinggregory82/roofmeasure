@@ -211,7 +211,7 @@ details.card>summary .tag.hot{color:var(--good)}
     <div id="drop">
       <h2>Drop an aerial image</h2>
       <div class="rule"></div>
-      <p>Type an address in the panel and the imagery is fetched and scaled for you. Or drop your own screenshot — paste the map URL with it and the scale still sets itself.</p>
+      <p>Zoom Google Maps until the roof fills your screen, then screenshot the whole window and paste it here. The tool finds the map's scale bar and works the rest out.</p>
       <button class="btn" style="width:auto;padding:9px 22px" id="pickBtn">Choose image</button>
       <div class="keys">or paste with Ctrl + V &nbsp;·&nbsp; or drag a file here</div>
       <input type="file" id="file" accept="image/*" hidden>
@@ -234,45 +234,51 @@ details.card>summary .tag.hot{color:var(--good)}
     </div>
 
     <details class="card step" id="step1" open>
-      <summary><span class="n">1</span>Site and scale <span class="tag" id="s1tag">start here</span></summary>
+      <summary><span class="n">1</span>Image and scale <span class="tag" id="s1tag">start here</span></summary>
       <div class="body">
-        <div class="sub-h">By address — arrives pre-scaled</div>
-        <div class="field"><label>Street address or lat, lng</label>
-          <input class="inp" id="addr" placeholder="1247 N Van Dyke Rd, Bad Axe MI"></div>
-        <div class="row" style="margin-bottom:9px">
-          <div class="field" style="margin:0"><label>Imagery</label>
-            <select class="inp" id="tileSrc"><option value="esri">Esri — to z21</option><option value="michigan">Michigan 12 in — z19</option><option value="usgs">USGS — z19 max</option><option value="custom">Custom tiles…</option></select></div>
-          <div class="field" style="flex:0 0 76px;margin:0"><label>Detail</label>
-            <select class="inp" id="tileZ"><option value="19">z19</option><option value="20">z20</option><option value="21" selected>z21</option></select></div>
-          <div class="field" style="flex:0 0 76px;margin:0"><label>Across</label>
-            <select class="inp" id="tileSpan"><option value="150">150ft</option><option value="250" selected>250ft</option><option value="400">400ft</option><option value="700">700ft</option></select></div>
-        </div>
-        <div class="field" id="customWrap" style="display:none"><label>Tile URL template</label>
-          <input class="inp" id="customUrl" placeholder="https://…/MapServer/tile/{z}/{y}/{x}"></div>
-        <button class="btn auto" id="geoGo">Find it and pull the imagery</button>
-        <button class="btn" id="gmapsBtn" style="margin-top:6px;display:none">Open this spot in Google Maps →</button>
-        <div class="tot" id="geoOut" style="margin-top:8px"></div>
+        <p class="note" style="margin:0 0 10px">Zoom Google Maps until the roof fills the screen, then screenshot the <b>whole window</b> including the scale bar in the corner, and paste here with <b>Ctrl+V</b>. That bar is all the tool needs.</p>
 
-        <div class="sub-h">Or scale your own screenshot</div>
-        <div class="field"><label>Paste the map URL</label>
-          <input class="inp" id="mapUrl" placeholder="https://www.google.com/maps/@43.80,-83.00,20z/…"></div>
-        <div class="row" style="margin-bottom:9px">
-          <div class="field" style="margin:0"><label>Capture</label>
-            <select class="inp" id="capScale"><option value="1">1× standard</option><option value="2">2× retina</option><option value="3">3× phone</option></select></div>
-          <div class="field" style="margin:0"><label>Resized?</label>
-            <select class="inp" id="cropMode"><option value="1">no</option><option value="0">yes</option></select></div>
+        <div id="sbFound" style="display:none">
+          <div class="tot" id="sbOut"></div>
+          <div class="row" style="margin-top:8px">
+            <div class="field" style="margin:0"><label>The bar reads</label>
+              <select class="inp" id="sbVal">
+                <option value="10">10 ft</option><option value="20">20 ft</option>
+                <option value="50" selected>50 ft</option><option value="100">100 ft</option>
+                <option value="200">200 ft</option><option value="500">500 ft</option>
+                <option value="1000">1000 ft</option>
+                <option value="16.404">5 m</option><option value="32.808">10 m</option>
+                <option value="65.617">20 m</option><option value="164.04">50 m</option>
+                <option value="328.08">100 m</option>
+              </select></div>
+            <button class="btn auto" id="sbApply" style="align-self:flex-end">Use it</button>
+          </div>
+          <p class="note">Read it off the picture and pick the match. Because the bar is measured in the screenshot's own pixels, retina capture and cropping make no difference.</p>
         </div>
-        <button class="btn" id="scaleFromUrl">Set scale from map URL</button>
-        <div class="row" style="margin-top:9px">
+        <div id="sbNone" class="note" style="display:none;margin:0 0 10px"><b>No scale bar found.</b> Include the map's bottom corner in the screenshot, or use one of the methods below.</div>
+
+        <div class="sub-h">Or read it off the map URL</div>
+        <div class="field"><label>Google Maps URL</label>
+          <input class="inp" id="mapUrl" placeholder="https://www.google.com/maps/@43.12526,-82.80041,20.5z/…"></div>
+        <div class="row" style="margin-bottom:9px">
+          <div class="field" style="margin:0"><label>Screen capture</label>
+            <select class="inp" id="capScale"><option value="1">1× standard</option><option value="2">2× retina / HiDPI</option><option value="3">3× phone</option></select></div>
+          <div class="field" style="margin:0"><label>Resized after?</label>
+            <select class="inp" id="cropMode"><option value="1">no</option><option value="0">yes — unusable</option></select></div>
+        </div>
+        <button class="btn auto" id="scaleFromUrl">Set scale from the URL</button>
+        <div class="tot" id="urlOut" style="margin-top:8px"></div>
+
+        <div class="sub-h">Or measure something you know</div>
+        <p class="note" style="margin:0 0 8px">Most reliable of all. In Google Maps right-click → <b>Measure distance</b>, draw along a roof edge, then draw the same edge here with the <b>Scale</b> tool and type the number.</p>
+        <div class="row">
           <div class="field"><label>Known length</label><input class="inp num" id="knownLen" type="number" step="0.01" placeholder="53.48"></div>
           <div class="field" style="flex:0 0 66px"><label>Units</label>
             <select class="inp" id="knownUnit"><option value="1">ft</option><option value="3.280839895">m</option><option value="0.0833333">in</option></select></div>
         </div>
         <button class="btn" id="applyScale">Apply to drawn line</button>
         <button class="btn ghost" id="ocrBtn" style="margin-top:6px">Read the label off the image</button>
-        <p class="note" style="margin-top:10px"><b>Rural address coming back coarse?</b> Esri falls back to metre-scale NAIP outside towns. <b>Michigan statewide</b> is 12-inch orthoimagery flown by the state — same z19 grid, but real detail rather than an upsample. Try it first. If it is still not enough, use <b>Open this spot in Google Maps</b>, zoom until the roof fills the screen, screenshot, paste here, then copy the URL out of Google's address bar and set the scale from it.</p>
-        <p class="note"><b>Custom tiles</b> takes any <b>Web Mercator</b> XYZ or ArcGIS cache — put {z}, {x} and {y} in the template. County caches published in State Plane will not line up and are not usable here.</p>
-        <p class="note" id="ocrNote">Where Esri has no coverage, use <b>Open this spot in Google Maps</b>, screenshot what you see, and paste it back with Ctrl+V — the scale is already worked out from the link. Capture multiplier is read off your display.</p>
+        <p class="note" id="ocrNote">Crop nothing and resize nothing — the URL scale only holds for the screenshot exactly as taken.</p>
       </div>
     </details>
 
@@ -380,7 +386,7 @@ details.card>summary .tag.hot{color:var(--good)}
     </details>
 
     <div id="scaleTag" hidden></div><div id="facetTag" hidden></div><div id="runTag" hidden></div>
-    <div id="geoTag" hidden></div><div id="sunTag" hidden></div>
+    <div id="sunTag" hidden></div>
   </aside>
 </div>
 <div class="toast" id="toast"></div>
@@ -401,7 +407,7 @@ var S={img:null,imgSrc:null,z:1,px:0,py:0,mode:'trace',ftPerPx:null,calibFeet:nu
   sun:null,           /* {alt,az} */
   shadow:{eave:null,ridge:null,run:null},
   pending:null,       /* what a line measurement is feeding */
-  ocrBox:null,geo:null,scaleSource:null,blankTiles:0,tileTotal:0,tileZ:null};
+  ocrBox:null,geo:null,scaleSource:null,tileZ:null,scaleBar:null};
 
 var cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 var mouseImg=null,dragging=null,spaceDown=false,shiftDown=false;
@@ -867,14 +873,11 @@ function draw(){
     if(S.ftPerPx)label((a.x+b.x)/2,(a.y+b.y)/2,'SCALE',fmt(dist(S.calib.a,S.calib.b)*S.ftPerPx,2)+' ft','#4FA8E8');
   }
 
-  if(S.geo&&S.img&&S.scaleSource==='tiles'){
-    var gc=toScreen({x:S.img.width/2,y:S.img.height/2});
-    ctx.strokeStyle=hexa('#4FA8E8',.85);ctx.lineWidth=1.4;
-    ctx.beginPath();ctx.arc(gc.x,gc.y,7,0,6.284);ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(gc.x-13,gc.y);ctx.lineTo(gc.x-3,gc.y);ctx.moveTo(gc.x+3,gc.y);ctx.lineTo(gc.x+13,gc.y);
-    ctx.moveTo(gc.x,gc.y-13);ctx.lineTo(gc.x,gc.y-3);ctx.moveTo(gc.x,gc.y+3);ctx.lineTo(gc.x,gc.y+13);
-    ctx.stroke();
+  if(S.scaleBar&&S.img){
+    var b1=toScreen({x:S.scaleBar.x1,y:S.scaleBar.y}),b2=toScreen({x:S.scaleBar.x2,y:S.scaleBar.y});
+    ctx.beginPath();ctx.moveTo(b1.x,b1.y);ctx.lineTo(b2.x,b2.y);
+    ctx.lineWidth=4;ctx.strokeStyle=hexa('#5FD3B2',.55);ctx.stroke();
+    vtx(b1,'#5FD3B2',false);vtx(b2,'#5FD3B2',false);
   }
   if(S.ocrBox){
     var p1=toScreen(S.ocrBox.a),p2=toScreen(S.ocrBox.b);
@@ -1084,19 +1087,15 @@ function renderChecks(){
   if(!S.img){add('warn','Load an aerial image to begin.');}
   else{
     var mx=Math.max(S.img.width,S.img.height);
-    if(mx<600)add('bad','The image is only '+S.img.width+'×'+S.img.height+' pixels. A roof spans barely a hundred of those, so auto-trace is guessing. Pull imagery by address in step 1 instead.');
+    if(mx<600)add('bad','The image is only '+S.img.width+'×'+S.img.height+' pixels. A roof spans barely a hundred of those, so auto-trace is guessing. Zoom in further before you screenshot.');
     else if(mx<900)add('warn','The image is '+S.img.width+'×'+S.img.height+' pixels — workable, but more detail would trace cleaner.');
     if(!S.ftPerPx)add('bad','Scale is not set. Nothing below can be computed until it is.');
   }
   if(S.img&&S.ftPerPx){
     add('ok','Scale set — '+fmt(S.ftPerPx*12,2)+' in per pixel'+
-      (S.scaleSource==='tiles'?', computed from the tile grid. Nothing to calibrate.':'.'));
-    if(S.scaleSource==='tiles'){
-      if(S.blankTiles)add('bad','This spot has no published aerial imagery from that provider — '+S.blankTiles+' of '+S.tileTotal+
-        ' tiles came back empty. Try the USGS layer, or screenshot it from Google Maps and scale from the URL.');
-      else add('warn','Aerial imagery is refreshed every few years. Confirm the roof still looks like this.');}
-    if(S.ftPerPx>0.5)add('warn','Coarse at '+fmt(S.ftPerPx*12,1)+' in per pixel'+
-      (S.scaleSource==='tiles'?'. Switch Imagery to Esri and drop the span in step 1.':'. Expect a few percent on areas.'));
+      (S.scaleSource==='bar'?', measured off the map\'s own scale bar.':
+       S.scaleSource==='url'?', read off the map URL zoom.':'.'));
+    if(S.ftPerPx>0.5)add('warn','Coarse at '+fmt(S.ftPerPx*12,1)+' in per pixel. Zoom in further in Google Maps and screenshot again.');
   }
   var bad=S.facets.filter(function(f){return selfIntersects(f.pts);});
   if(bad.length)add('bad',bad.length+' shape'+(bad.length>1?'s cross':' crosses')+' over itself. Fix the outline before trusting the area.');
@@ -1167,8 +1166,8 @@ function renderSteps(){
      !S.ftPerPx?'Scale is not set yet':'Trace a roof plane');
 
   $('s1tag').textContent=S.ftPerPx?
-    ((S.tileZ?'z'+S.tileZ+' · ':'')+fmt(S.ftPerPx*12,1)+' in/px'):
-    (S.geo?String(S.geo.label).split(',')[0]:'start here');
+    ((S.tileZ?'z'+S.tileZ+' · ':S.scaleSource==='bar'?'from bar · ':'')+fmt(S.ftPerPx*12,1)+' in/px'):
+    (S.img?'scale not set':'start here');
   var np=planes().length;
   $('s2tag').textContent=np?(np+' plane'+(np>1?'s':'')+(S.runs.length?' · '+S.runs.length+' runs':' · no runs')):
     (S.img?'nothing traced':'');
@@ -1526,193 +1525,100 @@ function scaleFromUrl(){
 $('applyScale').addEventListener('click',applyScale);
 $('scaleFromUrl').addEventListener('click',scaleFromUrl);
 
-/* ══════════════════ address → scaled imagery ══════════════════ */
-var TILES={
-  custom:{url:'',name:'Custom tiles',max:23},
-  michigan:{url:'https://imagery.michigan.gov/server/rest/services/Michigan_imagery_public/MapServer/tile/{z}/{y}/{x}',
-        name:'Michigan statewide (12 in)',max:19},
-  esri:{url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        name:'Esri World Imagery',max:21},
-  usgs:{url:'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
-        name:'USGS Imagery',max:19}
-};
-var jsonpN=0;
-function jsonp(url,cb){
-  var name='__rtcb'+(++jsonpN),s=document.createElement('script'),done=false;
-  function cleanup(){try{delete window[name];}catch(e){window[name]=undefined;}
-    if(s.parentNode)s.parentNode.removeChild(s);}
-  window[name]=function(data){if(done)return;done=true;cleanup();cb(null,data);};
-  s.src=url+(url.indexOf('?')>-1?'&':'?')+'callback='+name;
-  s.onerror=function(){if(done)return;done=true;cleanup();cb(true);};
-  document.head.appendChild(s);
-  setTimeout(function(){if(done)return;done=true;cleanup();cb(true);},14000);
-}
-function geocode(q,cb){
-  var ll=q.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
-  if(ll){cb(null,{lat:parseFloat(ll[1]),lng:parseFloat(ll[2]),label:'coordinates',src:'typed'});return;}
-  jsonp('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?address='+
-    encodeURIComponent(q)+'&benchmark=Public_AR_Current&format=jsonp',function(err,d){
-    var m=d&&d.result&&d.result.addressMatches&&d.result.addressMatches[0];
-    if(!err&&m&&m.coordinates){
-      cb(null,{lat:m.coordinates.y,lng:m.coordinates.x,label:m.matchedAddress||q,src:'US Census'});return;}
-    fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(q))
-      .then(function(r){return r.json();})
-      .then(function(a){
-        if(!a||!a.length){cb('notfound');return;}
-        cb(null,{lat:parseFloat(a[0].lat),lng:parseFloat(a[0].lon),
-          label:a[0].display_name||q,src:'OpenStreetMap'});})
-      .catch(function(){cb('offline');});
-  });
-}
-function lngToTx(lng,z){return (lng+180)/360*Math.pow(2,z);}
-function latToTy(lat,z){var r=lat*Math.PI/180;
-  return (1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2*Math.pow(2,z);}
-function mPerPx(lat,z){return 156543.03392*Math.cos(lat*Math.PI/180)/Math.pow(2,z);}
-
-function fetchImagery(g,z,spanFt,key,cb){
-  var prov=TILES[key],asked=z;
-  if(key==='custom'){
-    var tpl=$('customUrl').value.trim();
-    if(!/\{z\}/.test(tpl)||!/\{x\}/.test(tpl)||!/\{y\}/.test(tpl)){cb('badtpl');return;}
-    prov={url:tpl,name:'Custom tiles',max:23};
+/* ══════════════════ scale from the map's own scale bar ══════════════════ */
+function detectScaleBar(img){
+  var x0=Math.floor(img.width*0.35),y0=Math.floor(img.height*0.72);
+  var w=img.width-x0,hh=img.height-y0;
+  if(w<40||hh<12)return null;
+  var c=document.createElement('canvas');c.width=w;c.height=hh;
+  var x=c.getContext('2d',{willReadFrequently:true});
+  x.drawImage(img,x0,y0,w,hh,0,0,w,hh);
+  var d;try{d=x.getImageData(0,0,w,hh).data;}catch(e){return null;}
+  function bright(px,py){var i=(py*w+px)*4;return d[i]>212&&d[i+1]>212&&d[i+2]>212;}
+  function tick(px,py){
+    var up=0,dn=0,k;
+    for(k=1;k<12&&py-k>=0;k++){if(bright(px,py-k))up++;else break;}
+    for(k=1;k<12&&py+k<hh;k++){if(bright(px,py+k))dn++;else break;}
+    return Math.max(up,dn);
   }
-  if(z>prov.max)z=prov.max;
-  var ftPx=mPerPx(g.lat,z)*3.280839895;
-  var W=Math.min(2200,Math.max(400,Math.round(spanFt/ftPx)));
-  var H=Math.round(W*0.78);
-  var cxw=lngToTx(g.lng,z)*256,cyw=latToTy(g.lat,z)*256;
-  var ox=cxw-W/2,oy=cyw-H/2;
-  var tx0=Math.floor(ox/256),tx1=Math.floor((ox+W-1)/256);
-  var ty0=Math.floor(oy/256),ty1=Math.floor((oy+H-1)/256);
-  var c=document.createElement('canvas');c.width=W;c.height=H;
-  var x2=c.getContext('2d');
-  x2.fillStyle='#1a1f22';x2.fillRect(0,0,W,H);
-  var total=(tx1-tx0+1)*(ty1-ty0+1),done=0,failed=0,blank=0;
-  if(total>90){cb('toobig');return;}
-  /* the imagery services answer an unpublished zoom with a valid grey
-     "map data not yet available" tile, not an error — so inspect the pixels */
-  var sc=document.createElement('canvas');sc.width=32;sc.height=32;
-  var sx2=sc.getContext('2d',{willReadFrequently:true});
-  function tileIsBlank(im){
-    /* a placeholder is one flat grey across almost the whole tile; real
-       ground cover — even snow or a white roof — never is */
-    try{
-      sx2.clearRect(0,0,32,32);sx2.drawImage(im,0,0,32,32);
-      var d=sx2.getImageData(0,0,32,32).data,n=1024,i,k,bins={},best=0,bk=0;
-      for(i=0;i<d.length;i+=4){
-        k=(d[i]>>4)*256+(d[i+1]>>4)*16+(d[i+2]>>4);
-        bins[k]=(bins[k]||0)+1;
-        if(bins[k]>best){best=bins[k];bk=k;}}
-      var dr=((bk/256)|0)*16+8,dg=((((bk/16)|0)%16))*16+8,db=(bk%16)*16+8;
-      var spread=Math.max(Math.abs(dr-dg),Math.abs(dg-db),Math.abs(dr-db));
-      return best/n>0.75&&spread<=16&&(dr+dg+db)/3>170;
-    }catch(e){return false;}
+  var best=null;
+  for(var y=0;y<hh;y++){
+    var px2=0;
+    while(px2<w){
+      if(!bright(px2,y)){px2++;continue;}
+      var s=px2;
+      while(px2<w&&bright(px2,y))px2++;
+      var len=px2-s;
+      if(len<25||len>w*0.75)continue;
+      var t1=tick(s,y),t2=tick(px2-1,y);
+      if(t1<3&&t2<3)continue;
+      var score=len*(1+(t1>=3?1:0)+(t2>=3?1:0));
+      if(!best||score>best.score)best={x1:x0+s,x2:x0+px2-1,y:y0+y,len:len,score:score};
+    }
   }
-  function finish(){
-    if(failed===total){cb('blocked');return;}
-    var url;
-    try{url=c.toDataURL('image/png');}catch(e){cb('tainted');return;}
-    cb(null,{url:url,w:W,h:H,ftPerPx:ftPx,z:z,asked:asked,key:key,failed:failed,blank:blank,total:total,provider:prov.name});
-  }
-  for(var ty=ty0;ty<=ty1;ty++)for(var tx=tx0;tx<=tx1;tx++){
-    (function(tx,ty){
-      var im=new Image();
-      im.crossOrigin='anonymous';
-      im.onload=function(){
-        if(tileIsBlank(im))blank++;
-        try{x2.drawImage(im,tx*256-ox,ty*256-oy);}catch(e){failed++;}
-        step();
-      };
-      im.onerror=function(){failed++;step();};
-      function step(){busy(true,'Pulling imagery — '+(++done)+' of '+total+' tiles');
-        if(done===total)finish();}
-      im.src=prov.url.replace('{z}',z).replace('{y}',ty).replace('{x}',tx);
-    })(tx,ty);
-  }
+  return best;
 }
-function goAddress(){
-  var q=$('addr').value.trim();
-  if(!q){toast('Type an address first',1);return;}
-  busy(true,'Looking up the address');
-  geocode(q,function(err,g){
-    if(err){busy(false);
-      toast(err==='notfound'?'No match for that address':'Could not reach the lookup service — check the connection',1);
-      return;}
-    S.geo=g;
-    $('shLat').value=g.lat.toFixed(6);$('shLng').value=g.lng.toFixed(6);
-    $('shNorth').value=0;computeSun();
-    $('gmapsBtn').style.display='';
-    if(!$('mapUrl').value)$('mapUrl').value=googleUrl();
-    renderGeo(null);
-    var z=parseInt($('tileZ').value,10),span=parseInt($('tileSpan').value,10),key=$('tileSrc').value;
-    var wanted=z;
-    busy(true,'Pulling imagery');
-    var tries=0;
-    (function attempt(zz){
-    fetchImagery(g,zz,span,key,function(e2,r){
-      /* imagery is not published at every zoom everywhere — step down and retry */
-      if(!e2&&(r.failed+r.blank)>r.total*0.3&&zz>17&&tries++<4){
-        toast('Nothing published at z'+zz+' here — dropping to z'+(zz-1));
-        attempt(zz-1);return;}
-      if(e2==='blocked'&&zz>17&&tries++<4){attempt(zz-1);return;}
-      busy(false);
-      if(e2){
-        var msg={toobig:'That area needs too many tiles — pick a smaller span or less detail',
-          badtpl:'The tile URL needs {z}, {x} and {y} placeholders in it',
-          blocked:'The imagery service could not be reached from here. Open this file directly in a browser, or drop in a screenshot instead.',
-          tainted:'The imagery loaded but the browser will not let it be measured. Drop in a screenshot instead.'}[e2]||'Imagery failed';
-        toast(msg,1);renderGeo(null);return;}
-      r.wanted=wanted;
-      resetMeasurements();
-      loadImage(r.url,function(){
-        S.ftPerPx=r.ftPerPx;S.calibFeet=r.ftPerPx*r.w;S.scaleSource='tiles';S.tileZ=r.z;
-        var st=$('statScale');st.textContent=fmt(S.ftPerPx*12,2)+' in/px';st.classList.remove('off');
-        $('scaleTag').textContent='z'+r.z+' · '+fmt(r.ftPerPx*12,2)+' in/px';
-        renderGeo(r);renderFacets();renderRuns();renderTotals();renderPitchOut();fit();
-        setMode('wand');openStep('step2');
-        S.blankTiles=r.blank;S.tileTotal=r.total;
-        if(r.key==='usgs'&&r.wanted>r.z)
-          toast('USGS tops out at z'+r.z+' — '+fmt(r.ftPerPx*12,1)+' in/px. Switch Imagery to Esri for finer.',1);
-        else if(r.wanted>r.z)
-          toast('No z'+r.wanted+' imagery published here — z'+r.z+' is the ceiling. Try the Google Maps route below.',1);
-        else if(r.failed+r.blank)
-          toast((r.failed+r.blank)+' of '+r.total+' tiles have no imagery',1);
-        else toast('Scaled at '+fmt(r.ftPerPx*12,2)+' in/px — click a roof plane');
-      });
-    });
-    })(z);
-  });
+function runScaleBar(){
+  S.scaleBar=S.img?detectScaleBar(S.img):null;
+  var f=$('sbFound'),n=$('sbNone');
+  if(S.scaleBar){
+    f.style.display='';n.style.display='none';
+    $('sbOut').innerHTML=tl('Scale bar','found, '+S.scaleBar.len+' px long');
+  }else{f.style.display='none';n.style.display=S.img?'':'none';}
+  draw();
 }
-function googleUrl(){
-  if(!S.geo)return null;
-  var z=parseInt($('tileZ').value,10)||21;
-  return 'https://www.google.com/maps/@'+S.geo.lat.toFixed(7)+','+S.geo.lng.toFixed(7)+','+z+'z/data=!3m1!1e3';
-}
-$('gmapsBtn').addEventListener('click',function(){
-  var u=googleUrl();if(!u)return;
-  $('mapUrl').value=u;
-  window.open(u,'_blank','noopener');
-  toast('Screenshot it, then paste here — the scale is already worked out');
+$('sbApply').addEventListener('click',function(){
+  if(!S.scaleBar){toast('No scale bar detected',1);return;}
+  var ft=parseFloat($('sbVal').value);
+  S.ftPerPx=ft/S.scaleBar.len;S.calibFeet=ft;S.scaleSource='bar';S.tileZ=null;
+  var st=$('statScale');st.textContent=fmt(S.ftPerPx*12,2)+' in/px';st.classList.remove('off');
+  $('scaleTag').textContent=$('sbVal').selectedOptions[0].text+' bar';
+  $('sbOut').innerHTML=tl('Scale bar',S.scaleBar.len+' px')+
+    tl('Reads',$('sbVal').selectedOptions[0].text)+
+    tl('Resolution',fmt(S.ftPerPx*12,2)+' in/px')+
+    tl('Ground covered',fmt(S.img.width*S.ftPerPx)+' × '+fmt(S.img.height*S.ftPerPx)+' ft');
+  renderFacets();renderRuns();renderTotals();renderPitchOut();draw();
+  toast('Scale set from the bar — '+fmt(S.ftPerPx*12,2)+' in/px');
+  openStep('step2');
 });
-function renderGeo(r){
-  var el=$('geoOut');
-  if(!S.geo){el.innerHTML='';$('geoTag').textContent='';return;}
-  var h2=tl('Found',esc(String(S.geo.label).split(',').slice(0,2).join(',')))+
-    tl('Coordinates',S.geo.lat.toFixed(5)+', '+S.geo.lng.toFixed(5))+
-    tl('Lookup',S.geo.src);
-  if(r)h2+=tl('Imagery',r.provider)+
-    tl('Detail',(r.wanted||r.asked)>r.z?
-        ('z'+r.z+' — no z'+(r.wanted||r.asked)+' published here'):('z'+r.z))+
-    tl('Resolution',fmt(r.ftPerPx*12,2)+' in/px')+
-    tl('Image size',r.w+' × '+r.h+' px')+
-    tl('Ground covered',fmt(r.w*r.ftPerPx)+' × '+fmt(r.h*r.ftPerPx)+' ft');
-  el.innerHTML=h2;
-  $('geoTag').textContent=r?'scaled':'located';
+
+/* ══════════════════ scale from a Google Maps URL ══════════════════ */
+function parseMapUrl(u){
+  var m=u.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?)([zm])/);
+  if(m){
+    if(m[4]==='m')return {err:'That URL is in Earth metres mode. Switch Maps back to the flat satellite view so the URL ends in a z.'};
+    return {lat:parseFloat(m[1]),lng:parseFloat(m[2]),z:parseFloat(m[3])};
+  }
+  var a=u.match(/!3d(-?\d+(?:\.\d+)?)/),b=u.match(/!4d(-?\d+(?:\.\d+)?)/),c=u.match(/[?&]z=(\d+(?:\.\d+)?)/);
+  if(a&&c)return {lat:parseFloat(a[1]),lng:b?parseFloat(b[1]):0,z:parseFloat(c[1])};
+  if(/maps\.app\.goo\.gl|goo\.gl\/maps/.test(u))
+    return {err:'That is a short link. Open it, let it expand, then copy the long URL from the address bar.'};
+  return {err:'No @lat,lng,zoom found in that URL. Copy it from the address bar after zooming in.'};
 }
-$('tileSrc').addEventListener('change',function(e){
-  $('customWrap').style.display=e.target.value==='custom'?'':'none';});
-$('geoGo').addEventListener('click',goAddress);
-$('addr').addEventListener('keydown',function(e){if(e.key==='Enter')goAddress();});
+function scaleFromUrl(){
+  var u=$('mapUrl').value.trim();
+  if(!u){toast('Paste the Maps URL first',1);return;}
+  if($('cropMode').value==='0'){toast('A resized screenshot cannot be scaled from the URL',1);return;}
+  var r=parseMapUrl(u);
+  if(r.err){toast(r.err,1);$('urlOut').innerHTML='<div class="empty">'+esc(r.err)+'</div>';return;}
+  var cap=parseFloat($('capScale').value)||1;
+  var ftPerPx=156543.03392*Math.cos(r.lat*Math.PI/180)/Math.pow(2,r.z)*3.280839895/cap;
+  if(!isFinite(ftPerPx)||ftPerPx<=0){toast('That zoom did not compute',1);return;}
+  S.ftPerPx=ftPerPx;S.calibFeet=S.img?ftPerPx*S.img.width:null;
+  S.scaleSource='url';S.tileZ=r.z;S.geo={lat:r.lat,lng:r.lng};
+  if(!$('shLat').value){$('shLat').value=r.lat.toFixed(6);$('shLng').value=r.lng.toFixed(6);
+    $('shNorth').value=0;computeSun();}
+  var st=$('statScale');st.textContent=fmt(ftPerPx*12,2)+' in/px';st.classList.remove('off');
+  $('scaleTag').textContent='z'+r.z+' · '+fmt(ftPerPx*12,2)+' in/px';
+  $('urlOut').innerHTML=tl('Zoom','z'+r.z)+tl('Centre',r.lat.toFixed(5)+', '+r.lng.toFixed(5))+
+    tl('Resolution',fmt(ftPerPx*12,2)+' in/px')+
+    (S.img?tl('Ground covered',fmt(S.img.width*ftPerPx)+' × '+fmt(S.img.height*ftPerPx)+' ft'):'');
+  renderFacets();renderRuns();renderTotals();renderPitchOut();draw();
+  toast('Scale set — '+fmt(ftPerPx*12,2)+' in/px');
+  if(S.img)openStep('step2');
+}
+$('scaleFromUrl').addEventListener('click',scaleFromUrl);
+$('mapUrl').addEventListener('keydown',function(e){if(e.key==='Enter')scaleFromUrl();});
 
 /* ══════════════════ OCR ══════════════════ */
 $('ocrBtn').addEventListener('click',function(){setMode('ocr');toast('Drag a box around the distance text');});
@@ -1978,14 +1884,14 @@ function snapshot(withImage){
     ui:{lat:$('shLat').value,lng:$('shLng').value,date:$('shDate').value,time:$('shTime').value,
         tz:$('shTz').value,north:$('shNorth').value,url:$('mapUrl').value,cap:$('capScale').value,
         overhang:$('overhang').value,capLf:$('capLf').value,pSq:$('pSq').value,pLab:$('pLab').value,
-        autoWaste:S.autoWaste,addr:$('addr').value},geo:S.geo,scaleSource:S.scaleSource};
+        autoWaste:S.autoWaste},geo:S.geo,scaleSource:S.scaleSource,tileZ:S.tileZ};
 }
 function restore(j,cb){
   S.calib=j.calib;S.calibFeet=j.calibFeet;S.ftPerPx=j.ftPerPx;
   S.facets=(j.facets||[]).map(function(f){if(!f.kind)f.kind='plane';return f;});
   S.runs=(j.runs||[]).map(function(r){if(!RUNKIND[r.kind])r.kind='ridge';return r;});
   S.waste=j.waste||10;S.bps=j.bps||3;S.seq=j.seq||0;S.shadow=j.shadow||{eave:null,ridge:null,run:null};
-  S.geo=j.geo||null;S.scaleSource=j.scaleSource||null;if(j.ui&&j.ui.addr)$('addr').value=j.ui.addr;renderGeo(null);
+  S.geo=j.geo||null;S.scaleSource=j.scaleSource||null;S.tileZ=j.tileZ||null;
   var u=j.ui||{};
   ['shLat','shLng','shDate','shTime','shTz','shNorth','mapUrl','capScale','overhang','capLf','pSq','pLab']
     .forEach(function(id,i){
@@ -2047,7 +1953,7 @@ function tryRestore(){
 }
 $('resetAll').addEventListener('click',function(){
   if(!confirm('Clear the image and every measurement?'))return;
-  S.img=null;S.imgSrc=null;S.A=null;S.geo=null;resetMeasurements();renderGeo(null);
+  S.img=null;S.imgSrc=null;S.A=null;S.geo=null;resetMeasurements();
   $('drop').classList.remove('hide');
   try{if(window.storage)window.storage.delete('roof:autosave').catch(function(){});}catch(e){}
   draw();
@@ -2063,8 +1969,8 @@ function loadImage(src,cb){
     setTimeout(function(){
       S.A=buildAnalysis(im);
       $('detTag').textContent=S.A?S.A.w+'×'+S.A.h+' analysed':'unavailable';
-      busy(false);fit();magBadge();
-      if(Math.max(im.width,im.height)<600&&S.scaleSource!=='tiles')
+      busy(false);fit();magBadge();runScaleBar();
+      if(Math.max(im.width,im.height)<600)
         toast('Only '+im.width+'×'+im.height+' pixels — too coarse to trace well',1);
       if(cb)cb();
     },20);
@@ -2086,9 +1992,9 @@ function readFile(f){
 }
 function resetMeasurements(){
   S.facets=[];S.runs=[];S.calib=null;S.ftPerPx=null;S.calibFeet=null;S.draft=[];S.sel=null;
-  S.shadow={eave:null,ridge:null,run:null};S.solvedPitch=null;S.pending=null;S.scaleSource=null;S.blankTiles=0;S.tileTotal=0;
+  S.shadow={eave:null,ridge:null,run:null};S.solvedPitch=null;S.pending=null;S.scaleSource=null;S.tileZ=null;S.scaleBar=null;
   var st=$('statScale');st.textContent='not set';st.classList.add('off');
-  $('scaleTag').textContent='';$('genTag').textContent='';
+  $('scaleTag').textContent='';$('genTag').textContent='';$('urlOut').innerHTML='';
   renderFacets();renderRuns();renderTotals();renderPitchOut();
 }
 $('pickBtn').addEventListener('click',function(){$('file').click();});
@@ -2100,7 +2006,7 @@ window.addEventListener('paste',function(e){
   for(var i=0;i<items.length;i++)if(/^image\//.test(items[i].type)){readFile(items[i].getAsFile());return;}
   var txt=(e.clipboardData&&e.clipboardData.getData)?e.clipboardData.getData('text'):'';
   if(txt&&/google\.[a-z.]+\/maps|maps\.app\.goo\.gl/.test(txt)&&/input|textarea/i.test(e.target.tagName)===false){
-    $('mapUrl').value=txt.trim();toast('Map URL captured — set the scale from it');
+    $('mapUrl').value=txt.trim();toast('Map URL captured — press Set scale from the URL');
   }
 });
 
