@@ -209,7 +209,7 @@ details.sec[open]>summary{margin-bottom:10px}
     <div class="sec">
       <h3><span class="n" id="n2">2</span>Trace the roof <span class="tag" id="t2"></span></h3>
       <div class="row" style="margin-bottom:9px">
-        <button class="btn alt" id="wandBtn">Auto-trace</button>
+        <button class="btn alt" id="wandBtn">Find the roof</button>
         <button class="btn ghost" id="squareBtn" style="flex:0 0 84px">Square up</button>
       </div>
       <div class="list" id="planeList"></div>
@@ -269,7 +269,7 @@ var RUNKIND={ridge:'Ridge',eave:'Eave',rake:'Rake',hip:'Hip',valley:'Valley'};
 var FLAT={ridge:1,eave:1};
 var S={img:null,imgSrc:null,A:null,z:1,px:0,py:0,mode:'trace',ftPerPx:null,calibFeet:null,
   calib:null,draft:[],planes:[],runs:[],sel:null,pitch:6,waste:10,bps:3,seq:0,
-  magnet:true,autoSquare:true,autoWaste:true,tol:30,scaleBar:null};
+  magnet:true,autoSquare:true,autoWaste:true,tol:30,scaleBar:null,cands:[]};
 var cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 var mouseImg=null,drag=null,space=false,shift=false;
 var $=function(i){return document.getElementById(i);};
@@ -462,7 +462,17 @@ function buildAnalysis(img){
     var gx=-bl[i0-w-1]-2*bl[i0-1]-bl[i0+w-1]+bl[i0-w+1]+2*bl[i0+1]+bl[i0+w+1];
     var gy=-bl[i0-w-1]-2*bl[i0-w]-bl[i0-w+1]+bl[i0+w-1]+2*bl[i0+w]+bl[i0+w+1];
     var m=Math.hypot(gx,gy);mag[i0]=m;if(m>mx)mx=m;}
-  return {w:w,h:h,s:s,R:R,G:G,B:B,mag:mag,maxMag:mx||1};
+  /* vegetation vs built surface — grass and canopy are strongly green-dominant,
+     roofs/drives/dirt are not. Deep shadow is thrown out rather than guessed at. */
+  var veg=new Uint8Array(n),built=new Uint8Array(n);
+  for(var q=0;q<n;q++){
+    var r0=R[q],g0=G[q],b0=B[q];
+    var hi=r0>g0?(r0>b0?r0:b0):(g0>b0?g0:b0);
+    var exg=(2*g0-r0-b0)/255;
+    veg[q]=exg>0.05?1:0;
+    built[q]=(!veg[q]&&hi>52)?1:0;
+  }
+  return {w:w,h:h,s:s,R:R,G:G,B:B,mag:mag,maxMag:mx||1,veg:veg,built:built};
 }
 function morph(m,w,h,dilate,k){
   var o=new Uint8Array(w*h),r=(k-1)/2;
@@ -516,7 +526,10 @@ function magicWand(seed,tol){
   if(sx<0||sy<0||sx>=A.w||sy>=A.h)return null;
   var w=A.w,h=A.h,n=w*h,mask=new Uint8Array(n);
   var si=sy*w+sx,sr=A.R[si],sg=A.G[si],sb=A.B[si];
-  var t2=tol*tol*3,stack=[si],count=0,cap=Math.min(n,600000);
+  var seedVeg=A.veg[si];
+  /* on a roof, run loose — a shaded slope and a sunlit slope are the same building.
+     but never cross the grass line, which is what used to make it bleed into the lawn. */
+  var t2=tol*tol*3*(seedVeg?1:2.6),stack=[si],count=0,cap=Math.min(n,600000);
   mask[si]=1;
   while(stack.length&&count<cap){
     var i=stack.pop();count++;
@@ -524,6 +537,7 @@ function magicWand(seed,tol){
     var nb=[x>0?i-1:-1,x<w-1?i+1:-1,y>0?i-w:-1,y<h-1?i+w:-1];
     for(var k=0;k<4;k++){
       var j=nb[k];if(j<0||mask[j])continue;
+      if(A.veg[j]!==seedVeg)continue;
       var dr=A.R[j]-sr,dg=A.G[j]-sg,db=A.B[j]-sb;
       if(dr*dr+dg*dg+db*db<=t2){mask[j]=1;stack.push(j);}}
   }
@@ -538,6 +552,89 @@ function magicWand(seed,tol){
   var borders=(mnx<=1?1:0)+(mxx>=w-2?1:0)+(mny<=1?1:0)+(mxy>=h-2?1:0);
   return {mask:mask,w:w,h:h,sx:sx,sy:sy,count:count,borders:borders,frac:count/(w*h)};
 }
+/* ══ find the buildings with no clicking at all ══ */
+function maskToPoly(mask,w,h){
+  var c=traceContour(mask,w,h);
+  if(!c)return null;
+  var pts=S.autoSquare?regularize(c,20,2.0):dp(c,2.2);
+  return pts&&pts.length>=3?pts:null;
+}
+/* how much of its own tightest rotated box does the shape fill?
+   a building is near 1, a driveway or a shadow spilling between trees is not */
+function rectFit(poly,pa){
+  var bestA=1e18,t,i,c,s2,x,y,mnx,mxx,mny,mxy;
+  for(t=0;t<90;t+=3){
+    c=Math.cos(t*Math.PI/180);s2=Math.sin(t*Math.PI/180);
+    mnx=1e18;mxx=-1e18;mny=1e18;mxy=-1e18;
+    for(i=0;i<poly.length;i++){
+      x=poly[i].x*c+poly[i].y*s2;y=-poly[i].x*s2+poly[i].y*c;
+      if(x<mnx)mnx=x;if(x>mxx)mxx=x;if(y<mny)mny=y;if(y>mxy)mxy=y;}
+    var a=(mxx-mnx)*(mxy-mny);
+    if(a<bestA)bestA=a;
+  }
+  return bestA>0?pa/bestA:0;
+}
+function detectBuildings(){
+  var A=S.A;if(!A)return [];
+  var w=A.w,h=A.h,n=w*h;
+  var m=A.built;
+  m=morph(m,w,h,0,3);m=morph(m,w,h,1,3);   /* open  — drop speckle */
+  m=morph(m,w,h,1,5);m=morph(m,w,h,0,5);   /* close — bridge ridge lines and vents */
+  var lab=new Int32Array(n),id=0,cands=[],minA=n*0.0015,maxA=n*0.22;
+  for(var i=0;i<n;i++){
+    if(!m[i]||lab[i])continue;
+    id++;
+    var st=[i],cnt=0,px=[],x0=w,x1=-1,y0=h,y1=-1;
+    lab[i]=id;
+    while(st.length){
+      var j=st.pop();cnt++;
+      if(px)px.push(j);
+      if(px&&px.length>maxA)px=null;
+      var x=j%w,y=(j-x)/w;
+      if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
+      if(x>0&&m[j-1]&&!lab[j-1]){lab[j-1]=id;st.push(j-1);}
+      if(x<w-1&&m[j+1]&&!lab[j+1]){lab[j+1]=id;st.push(j+1);}
+      if(y>0&&m[j-w]&&!lab[j-w]){lab[j-w]=id;st.push(j-w);}
+      if(y<h-1&&m[j+w]&&!lab[j+w]){lab[j+w]=id;st.push(j+w);}
+    }
+    if(!px||cnt<minA||cnt>maxA)continue;
+    /* a road or field edge runs off the picture, and a clipped building measures short */
+    var mg=Math.max(2,Math.round(Math.min(w,h)*0.006));
+    if(x0<=mg||y0<=mg||x1>=w-1-mg||y1>=h-1-mg)continue;
+    var bw=x1-x0+1,bh=y1-y0+1;
+    if(bw<8||bh<8)continue;
+    var fill=cnt/(bw*bh);
+    if(fill<0.38)continue;                  /* drives and tree shadow sprawl */
+    if(bw/bh>5||bh/bw>5)continue;           /* long thin things are pavement */
+    var sub=new Uint8Array(n);
+    for(var k=0;k<px.length;k++)sub[px[k]]=1;
+    var poly=maskToPoly(sub,w,h);
+    if(!poly)continue;
+    if(poly.length>12)continue;             /* buildings tidy up to a few corners */
+    var pa=areaPx(poly);
+    if(pa<cnt*0.6||pa>cnt*1.7)continue;     /* the tidy-up wandered off the blob */
+    if(rectFit(poly,pa)<0.62)continue;      /* drives, shadow and field edges sprawl */
+    cands.push({pts:poly,px:cnt,areaA:pa,
+      areaImg:pa/(A.s*A.s),cx:(x0+x1)/2,cy:(y0+y1)/2});
+  }
+  cands.sort(function(a,b){return b.px-a.px;});
+  return cands.slice(0,4);
+}
+function autoFindRoof(quiet){
+  if(!S.A){if(!quiet)toast('Paste a screenshot first',1);return 0;}
+  var cands=S.cands&&S.cands.length?S.cands:detectBuildings();
+  if(!cands.length){
+    if(!quiet)toast('Could not pick a roof out of that — switch to Auto and click on it',1);
+    return 0;}
+  var keep=cands.filter(function(c){return c.px>=cands[0].px*0.18;}).slice(0,3);
+  keep.forEach(function(c){
+    addPlane(c.pts.map(function(p){return{x:p.x/S.A.s,y:p.y/S.A.s};}));});
+  S.sel=null;renderPlanes();renderAll();draw();
+  if(!quiet)toast('Found '+keep.length+' building'+(keep.length>1?'s':'')+
+    (S.ftPerPx?' · '+fmt(totals().plan)+' sf footprint':' — now set the scale'));
+  return keep.length;
+}
+
 /* ══ measures ══ */
 function fPlan(f){return S.ftPerPx?areaPx(f.pts)*S.ftPerPx*S.ftPerPx:0;}
 function fArea(f){return fPlan(f)*slope(f.pitch);}
@@ -714,7 +811,7 @@ function guide(){
   if(!S.ftPerPx){
     msg=S.draft.length&&S.mode==='scale'?'Click the other end of the line.':
         S.calib?'That line is <b>'+fmt(dist(S.calib.a,S.calib.b),0)+' px</b>. Tell the panel how many feet that really is.':
-        (S.scaleBar?'Scale bar found — confirm what it reads in the panel and press <b>Use it</b>.':
+        (S.scaleBar?'Read the bar in the panel crop — <b>ft or m, and what number</b> — pick it and press <b>Use it</b>.':
          'No scale bar in this shot. Screenshot the whole map window, or set the scale by hand.');
   }else if(!S.planes.length){
     msg=S.draft.length?'Keep clicking corners. <b>Enter</b> or click the first point to close.':
@@ -838,11 +935,17 @@ function checks(){
   }
   var bad=S.planes.filter(function(f){return selfIntersects(f.pts);});
   if(bad.length)add('bad',bad.length+' outline crosses over itself — the area is wrong until it is fixed.');
-  if(S.ftPerPx)onPlanes().forEach(function(f){
-    var a=fPlan(f);
-    if(a<60)add('warn',f.name+' is only '+fmt(a)+' sf — likely a mis-click.');
-    if(a>6000)add('warn',f.name+' is '+fmt(a)+' sf — check the scale.');
-  });
+  if(S.ftPerPx&&onPlanes().length){
+    var big=0;
+    onPlanes().forEach(function(f){var a=fPlan(f);if(a>big)big=a;});
+    if(big<400)add('bad','Biggest building comes out at '+fmt(big)+' sf — that is a garden shed, not a roof. '+
+      'The scale bar reading is almost certainly wrong; open the crop in step 1 and pick what it actually says.');
+    else if(big>9000)add('bad','Biggest building comes out at '+fmt(big)+' sf. Too big for a house — recheck the scale bar reading.');
+    onPlanes().forEach(function(f){
+      var a=fPlan(f);
+      if(a>=400&&a<big*0.06)add('warn',f.name+' is only '+fmt(a)+' sf — likely a stray shape.');
+    });
+  }
   if(onPlanes().length&&!S.runs.length)add('warn','No runs — starter, cap, drip edge and ice-and-water stay blank.');
   var diag=S.runs.filter(function(r){return r.kind==='hip'||r.kind==='valley';}).length;
   if(diag)add('warn',diag+' diagonal junction'+(diag>1?'s were':' was')+' guessed from plan shape. Confirm hip against valley.');
@@ -1110,17 +1213,45 @@ function renderScaleBar(){
   if(!S.scaleBar){
     box.innerHTML='<div class="empty-t"><b>No scale bar found.</b> Screenshot the whole map window, including the bottom corner where Google prints it. Or set the scale by hand below.</div>';
     pick.style.display='none';btn.style.display='none';return;}
-  box.innerHTML=L('Scale bar found',S.scaleBar.len+' px long');
-  var best=0,bd=1e9;
+  box.innerHTML=L('Scale bar found',S.scaleBar.len+' px long')+
+    '<canvas id="sbShot" style="width:100%;margin-top:8px;border:1px solid var(--line);'+
+    'border-radius:4px;background:#000;display:block"></canvas>'+
+    '<p class="note" style="margin-top:6px">Read the number off the bar above and pick it below. '+
+    'Everything downstream is multiplied by this.</p>';
+  sbCrop();
+  /* default to whatever makes the biggest detected building a believable house,
+     rather than the old guess, which quietly picked a wrong bar and scaled the whole job by it */
+  var target=(S.cands&&S.cands.length)?S.cands[0].areaImg:0;
+  var best=-1,bd=1e9;
   var opts=SBVALS.map(function(v,i){
-    var across=S.img.width*(v[0]/S.scaleBar.len);
-    var d=Math.abs(across-260);
-    if(d<bd){bd=d;best=i;}
-    return '<option value="'+v[0]+'">'+v[1]+' — image covers '+fmt(across)+' ft</option>';
+    var f=v[0]/S.scaleBar.len,across=S.img.width*f,lbl;
+    if(target){
+      var sf=target*f*f;
+      lbl=v[1]+' — that building is '+fmt(sf)+' sf';
+      /* Maps defaults to imperial in the US, so break near-ties toward feet */
+      var d=Math.abs(Math.log(sf/1800))+(/m$/.test(v[1])?0.3:0);
+      if(d<bd){bd=d;best=i;}
+    }else lbl=v[1]+' — image covers '+fmt(across)+' ft';
+    return '<option value="'+v[0]+'">'+lbl+'</option>';
   });
   $('sbVal').innerHTML=opts.join('');
-  $('sbVal').selectedIndex=best;
+  if(best>=0)$('sbVal').selectedIndex=best;
   pick.style.display='';btn.style.display='';
+}
+/* blow the bar and its label up so it can be read without leaving the app */
+function sbCrop(){
+  var c=$('sbShot');if(!c||!S.img||!S.scaleBar)return;
+  var b=S.scaleBar,pad=Math.max(46,b.len*0.9);
+  var x0=Math.max(0,Math.round(b.x1-pad)),x1=Math.min(S.img.width,Math.round(b.x2+pad));
+  var y0=Math.max(0,Math.round(b.y-26)),y1=Math.min(S.img.height,Math.round(b.y+22));
+  var sw=Math.max(1,x1-x0),sh=Math.max(1,y1-y0),k=Math.min(3,290/sw);
+  c.width=Math.round(sw*k);c.height=Math.round(sh*k);
+  var x=c.getContext('2d');
+  x.imageSmoothingEnabled=false;
+  x.drawImage(S.img,x0,y0,sw,sh,0,0,c.width,c.height);
+  x.strokeStyle='#5FD3B2';x.lineWidth=2;
+  x.beginPath();
+  x.moveTo((b.x1-x0)*k,(b.y-y0)*k);x.lineTo((b.x2-x0)*k,(b.y-y0)*k);x.stroke();
 }
 $('sbApply').addEventListener('click',function(){
   if(!S.scaleBar)return;
@@ -1171,7 +1302,10 @@ $('pitch').addEventListener('change',function(e){
   renderPlanes();renderRuns();renderAll();draw();
 });
 $('deriveBtn').addEventListener('click',function(){deriveRuns(false);});
-$('wandBtn').addEventListener('click',function(){setMode('wand');toast('Click once on a roof plane');});
+$('wandBtn').addEventListener('click',function(){
+  S.cands=detectBuildings();
+  if(!autoFindRoof(false)){setMode('wand');toast('Nothing found — click on the roof yourself',1);}
+});
 $('squareBtn').addEventListener('click',function(){
   var f=S.sel&&S.sel.t==='p'?S.planes.filter(function(x){return x.id===S.sel.id;})[0]:S.planes[S.planes.length-1];
   if(!f){toast('Trace something first',1);return;}
@@ -1248,7 +1382,7 @@ $('resetAll').addEventListener('click',function(){
 });
 function reset(){
   S.planes=[];S.runs=[];S.calib=null;S.ftPerPx=null;S.calibFeet=null;S.draft=[];S.sel=null;
-  S.scaleBar=null;renderScaleBar();renderPlanes();renderRuns();renderAll();
+  S.scaleBar=null;S.cands=[];renderScaleBar();renderPlanes();renderRuns();renderAll();
 }
 
 /* ══ image ══ */
@@ -1258,11 +1392,18 @@ function loadImage(src,cb){
     S.img=im;S.imgSrc=src;$('empty').classList.add('hide');
     busy(true);
     setTimeout(function(){
-      S.A=buildAnalysis(im);S.scaleBar=detectScaleBar(im);renderScaleBar();busy(false);fit();
-      if(cb)cb();else{setMode('scale');
-        toast(Math.max(im.width,im.height)<600?
-          ('Loaded '+im.width+'×'+im.height+' — small; zoom in further next time'):
-          ('Loaded '+im.width+'×'+im.height));}
+      S.A=buildAnalysis(im);S.scaleBar=detectScaleBar(im);
+      S.cands=S.A?detectBuildings():[];
+      renderScaleBar();busy(false);fit();
+      if(cb)cb();
+      else{
+        setMode('trace');
+        var n=autoFindRoof(true);
+        toast(n?('Traced '+n+' building'+(n>1?'s':'')+' — check the scale bar reading, top right')
+               :(Math.max(im.width,im.height)<600?
+                 'Loaded, but only '+im.width+'×'+im.height+' — too coarse to trace on its own':
+                 'Loaded — could not pick a roof out; hit Auto and click on it'));
+      }
       renderAll();
     },20);
   };
