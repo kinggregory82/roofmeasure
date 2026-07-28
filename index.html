@@ -1066,8 +1066,13 @@ function renderChecks(){
   var c=[],t=totals();
   function add(lvl,msg){c.push('<div class="chk '+lvl+'"><div class="b"></div><div>'+msg+'</div></div>');}
   if(!S.img){add('warn','Load an aerial image to begin.');}
-  else if(!S.ftPerPx){add('bad','Scale is not set. Every number below is meaningless until it is.');}
   else{
+    var mx=Math.max(S.img.width,S.img.height);
+    if(mx<600)add('bad','The image is only '+S.img.width+'×'+S.img.height+' pixels. A roof spans barely a hundred of those, so auto-trace is guessing. Pull imagery by address in step 1 instead.');
+    else if(mx<900)add('warn','The image is '+S.img.width+'×'+S.img.height+' pixels — workable, but more detail would trace cleaner.');
+    if(!S.ftPerPx)add('bad','Scale is not set. Nothing below can be computed until it is.');
+  }
+  if(S.img&&S.ftPerPx){
     add('ok','Scale set — '+fmt(S.ftPerPx*12,2)+' in per pixel'+
       (S.scaleSource==='tiles'?', computed from the tile grid. Nothing to calibrate.':'.'));
     if(S.scaleSource==='tiles')add('warn','Aerial imagery is refreshed every few years. Confirm the roof still looks like this.');
@@ -1980,7 +1985,10 @@ function loadImage(src,cb){
     setTimeout(function(){
       S.A=buildAnalysis(im);
       $('detTag').textContent=S.A?S.A.w+'×'+S.A.h+' analysed':'unavailable';
-      busy(false);fit();magBadge();if(cb)cb();
+      busy(false);fit();magBadge();
+      if(Math.max(im.width,im.height)<600&&S.scaleSource!=='tiles')
+        toast('Only '+im.width+'×'+im.height+' pixels — too coarse to trace well',1);
+      if(cb)cb();
     },20);
   };
   im.onerror=function(){toast('That image could not be loaded',1);};
