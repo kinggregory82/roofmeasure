@@ -512,7 +512,7 @@ function ptLine(p,a,b){
 }
 function magicWand(seed,tol){
   var A=S.A;if(!A)return null;
-  var a=toA(seed),sx=Math.round(a.x),sy=Math.round(a.y);
+  var a={x:seed.x*A.s,y:seed.y*A.s},sx=Math.round(a.x),sy=Math.round(a.y);
   if(sx<0||sy<0||sx>=A.w||sy>=A.h)return null;
   var w=A.w,h=A.h,n=w*h,mask=new Uint8Array(n);
   var si=sy*w+sx,sr=A.R[si],sg=A.G[si],sb=A.B[si];
