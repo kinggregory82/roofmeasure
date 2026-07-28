@@ -136,6 +136,14 @@ details.sec[open]>summary{margin-bottom:10px}
   #rail{border-left:0;border-top:1px solid var(--line)}
   #top{height:auto;flex-wrap:wrap;padding:8px 10px}
 }
+#pmWrap{position:fixed;inset:0;background:#0b0e10e8;z-index:60;display:none;
+  align-items:center;justify-content:center;padding:20px}
+#pmWrap.on{display:flex}
+#pmBox{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;
+  width:min(720px,96vw);max-height:94vh;overflow:auto}
+#pmBox h4{margin:0 0 6px;font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)}
+#pmCv{display:block;width:100%;background:var(--sunk);border:1px solid var(--line);
+  border-radius:5px;margin:10px 0;touch-action:none;cursor:crosshair}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -224,7 +232,8 @@ details.sec[open]>summary{margin-bottom:10px}
     <div class="sec">
       <h3><span class="n" id="n3">B</span>Pitch <span class="tag" id="t3"></span></h3>
       <select class="inp" id="pitch"></select>
-      <p class="note">Cannot be read from overhead. Use a pitch gauge on a ladder, or count siding courses on the gable end.</p>
+      <button class="btn" id="pitchPhoto" style="margin-top:8px">Measure it from a photo</button>
+      <p class="note" id="pitchNote"></p>
     </div>
 
     <div class="sec">
@@ -259,6 +268,22 @@ details.sec[open]>summary{margin-bottom:10px}
   </aside>
 </div>
 <div class="toast" id="toast"></div>
+<div id="pmWrap"><div id="pmBox">
+  <h4>Pitch from a photo</h4>
+  <p class="note" id="pmMsg">Paste or drop a photo that shows the gable end side-on — a site photo or a Street View screenshot both work.</p>
+  <canvas id="pmCv"></canvas>
+  <div class="tot" id="pmOut"></div>
+  <div class="row" style="margin-top:10px">
+    <button class="btn ghost" id="pmPick">Choose a file</button>
+    <button class="btn ghost" id="pmLevel">Camera was level</button>
+    <button class="btn ghost" id="pmRedo">Start over</button>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <button class="btn go" id="pmApply" disabled>Use this pitch</button>
+    <button class="btn ghost" id="pmClose" style="flex:0 0 90px">Close</button>
+  </div>
+  <input type="file" id="pmFile" accept="image/*" hidden>
+</div></div>
 <script>
 (function(){
 'use strict';
@@ -269,7 +294,8 @@ var RUNKIND={ridge:'Ridge',eave:'Eave',rake:'Rake',hip:'Hip',valley:'Valley'};
 var FLAT={ridge:1,eave:1};
 var S={img:null,imgSrc:null,A:null,z:1,px:0,py:0,mode:'trace',ftPerPx:null,calibFeet:null,
   calib:null,draft:[],planes:[],runs:[],sel:null,pitch:6,waste:10,bps:3,seq:0,
-  magnet:true,autoSquare:true,autoWaste:true,tol:30,scaleBar:null,cands:[]};
+  magnet:true,autoSquare:true,autoWaste:true,tol:30,scaleBar:null,cands:[],
+  scaleConfirmed:false,pitchSource:'assumed',pitchMeasured:null};
 var cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 var mouseImg=null,drag=null,space=false,shift=false;
 var $=function(i){return document.getElementById(i);};
@@ -464,15 +490,19 @@ function buildAnalysis(img){
     var m=Math.hypot(gx,gy);mag[i0]=m;if(m>mx)mx=m;}
   /* vegetation vs built surface — grass and canopy are strongly green-dominant,
      roofs/drives/dirt are not. Deep shadow is thrown out rather than guessed at. */
-  var veg=new Uint8Array(n),built=new Uint8Array(n);
+  var veg=new Uint8Array(n),built=new Uint8Array(n),ui=new Uint8Array(n);
   for(var q=0;q<n;q++){
     var r0=R[q],g0=G[q],b0=B[q];
     var hi=r0>g0?(r0>b0?r0:b0):(g0>b0?g0:b0);
+    var lo=r0<g0?(r0<b0?r0:b0):(g0<b0?g0:b0);
     var exg=(2*g0-r0-b0)/255;
     veg[q]=exg>0.05?1:0;
     built[q]=(!veg[q]&&hi>52)?1:0;
+    /* browser and Maps chrome — search chips, buttons, panels — is flat near-white.
+       Aerial imagery essentially never is, so this is what keeps the takeoff off the UI. */
+    ui[q]=(hi>217&&(hi-lo)/(hi||1)<0.12)?1:0;
   }
-  return {w:w,h:h,s:s,R:R,G:G,B:B,mag:mag,maxMag:mx||1,veg:veg,built:built};
+  return {w:w,h:h,s:s,R:R,G:G,B:B,mag:mag,maxMag:mx||1,veg:veg,built:built,ui:ui};
 }
 function morph(m,w,h,dilate,k){
   var o=new Uint8Array(w*h),r=(k-1)/2;
@@ -584,12 +614,13 @@ function detectBuildings(){
   for(var i=0;i<n;i++){
     if(!m[i]||lab[i])continue;
     id++;
-    var st=[i],cnt=0,px=[],x0=w,x1=-1,y0=h,y1=-1;
+    var st=[i],cnt=0,uiCnt=0,px=[],x0=w,x1=-1,y0=h,y1=-1;
     lab[i]=id;
     while(st.length){
       var j=st.pop();cnt++;
       if(px)px.push(j);
       if(px&&px.length>maxA)px=null;
+      if(A.ui[j])uiCnt++;
       var x=j%w,y=(j-x)/w;
       if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
       if(x>0&&m[j-1]&&!lab[j-1]){lab[j-1]=id;st.push(j-1);}
@@ -598,6 +629,7 @@ function detectBuildings(){
       if(y<h-1&&m[j+w]&&!lab[j+w]){lab[j+w]=id;st.push(j+w);}
     }
     if(!px||cnt<minA||cnt>maxA)continue;
+    if(uiCnt/cnt>0.35)continue;             /* that is a button, not a building */
     /* a road or field edge runs off the picture, and a clipped building measures short */
     var mg=Math.max(2,Math.round(Math.min(w,h)*0.006));
     if(x0<=mg||y0<=mg||x1>=w-1-mg||y1>=h-1-mg)continue;
@@ -610,7 +642,7 @@ function detectBuildings(){
     for(var k=0;k<px.length;k++)sub[px[k]]=1;
     var poly=maskToPoly(sub,w,h);
     if(!poly)continue;
-    if(poly.length>12)continue;             /* buildings tidy up to a few corners */
+    if(poly.length>26)continue;             /* buildings tidy up; sprawl does not */
     var pa=areaPx(poly);
     if(pa<cnt*0.6||pa>cnt*1.7)continue;     /* the tidy-up wandered off the blob */
     if(rectFit(poly,pa)<0.62)continue;      /* drives, shadow and field edges sprawl */
@@ -619,6 +651,12 @@ function detectBuildings(){
   }
   cands.sort(function(a,b){return b.px-a.px;});
   return cands.slice(0,4);
+}
+/* once there is a scale AND a footprint, nothing else needs asking for —
+   derive the runs so starter, cap, drip edge and ice-and-water stop reading "needs runs" */
+function finishOff(){
+  if(!S.ftPerPx||!onPlanes().length||S.runs.length)return 0;
+  return deriveRuns(true);
 }
 function autoFindRoof(quiet){
   if(!S.A){if(!quiet)toast('Paste a screenshot first',1);return 0;}
@@ -630,6 +668,7 @@ function autoFindRoof(quiet){
   keep.forEach(function(c){
     addPlane(c.pts.map(function(p){return{x:p.x/S.A.s,y:p.y/S.A.s};}));});
   S.sel=null;renderPlanes();renderAll();draw();
+  finishOff();
   if(!quiet)toast('Found '+keep.length+' building'+(keep.length>1?'s':'')+
     (S.ftPerPx?' · '+fmt(totals().plan)+' sf footprint':' — now set the scale'));
   return keep.length;
@@ -842,7 +881,35 @@ function readout(){
 }
 
 /* ══ rail ══ */
-function pitchOpts(sel){var h='';for(var i=0;i<=18;i++)h+='<option value="'+i+'"'+(i===sel?' selected':'')+'>'+i+'/12</option>';return h;}
+function pitchOpts(sel){
+  var plan=0,h='',i;
+  if(S.ftPerPx)onPlanes().forEach(function(f){plan+=fPlan(f);});
+  for(i=0;i<=18;i++){
+    var lbl=i+'/12';
+    if(plan)lbl+=' — '+fmt(Math.ceil(plan*slope(i)*(1+S.waste/100)/10)/10,1)+' sq';
+    h+='<option value="'+i+'"'+(i===sel?' selected':'')+'>'+lbl+'</option>';
+  }
+  return h;
+}
+/* the select is rebuilt only when the underlying number moves, so it does not
+   fight the user while they are scrolling it */
+var pitchSig='';
+function syncPitch(){
+  var plan=0;
+  if(S.ftPerPx)onPlanes().forEach(function(f){plan+=fPlan(f);});
+  var sig=Math.round(plan)+'|'+S.waste;
+  if(sig!==pitchSig){pitchSig=sig;$('pitch').innerHTML=pitchOpts(S.pitch);}
+  $('pitch').value=S.pitch;
+  var n=$('pitchNote');
+  if(S.pitchSource==='photo')
+    n.innerHTML='Measured <b>'+fmt(S.pitchMeasured,1)+'/12</b> off your photo, using '+S.pitch+'/12.';
+  else if(plan)
+    n.innerHTML='<b>'+S.pitch+'/12 assumed, not measured</b> — nothing in an overhead shot carries slope. '+
+      'At 8/12 this job is '+fmt(Math.ceil(plan*slope(8)*(1+S.waste/100)/10)/10,1)+' sq, at 4/12 it is '+
+      fmt(Math.ceil(plan*slope(4)*(1+S.waste/100)/10)/10,1)+' sq. Measure it from a photo or a gauge.';
+  else n.innerHTML='Nothing in an overhead shot carries slope. Measure it from a photo, a gauge, or by counting siding courses on the gable end.';
+  n.innerHTML+=' <b>Quickest source:</b> in the same Maps window press <b>3D</b> and tilt until you can see the gable end, screenshot that, and measure off it.';
+}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function renderPlanes(){
   var el=$('planeList');
@@ -916,7 +983,7 @@ function renderAll(){
     r.eave?L('Eave',fmt(r.eave,1)+' ft'):'',
     r.rake?L('Rake',fmt(r.rake,1)+' ft'):''
   ].join(''):'<div class="empty-t">Set the scale, then trace the roof.</div>';
-  calibReadout();checks();guide();
+  syncPitch();calibReadout();checks();guide();
 }
 function L(k,v){return '<div class="l"><i>'+k+'</i><b>'+v+'</b></div>';}
 function checks(){
@@ -929,7 +996,10 @@ function checks(){
     else if(mx<900)add('warn','Image is '+S.img.width+'×'+S.img.height+' px. Workable, but more detail traces cleaner.');
     if(!S.ftPerPx)add('bad','No scale set. Nothing can be computed until there is one.');
     else{
-      add('ok','Scale set — '+fmt(S.ftPerPx*12,2)+' in per pixel.');
+      if(S.scaleBar&&!S.scaleConfirmed)
+        add('warn','Scale was read off the bar automatically as '+fmt(S.calibFeet,0)+
+          ' ft. Check it against the crop in step 1 — everything on this page is multiplied by it.');
+      else add('ok','Scale set — '+fmt(S.ftPerPx*12,2)+' in per pixel.');
       if(S.ftPerPx>0.5)add('warn','Coarse at '+fmt(S.ftPerPx*12,1)+' in/px. Expect a few percent on areas.');
     }
   }
@@ -972,7 +1042,7 @@ function closePlane(){
   if(S.draft.length<3){S.draft=[];draw();return;}
   var pts=S.draft.slice();
   if(S.autoSquare&&pts.length>=4)pts=regularize(pts,14,1.0);
-  addPlane(pts);S.draft=[];
+  addPlane(pts);S.draft=[];finishOff();renderAll();
 }
 function delSel(){
   if(!S.sel)return;
@@ -1152,6 +1222,7 @@ cv.addEventListener('wheel',function(e){
   var r=cv.getBoundingClientRect();
   zoomAt(e.clientX-r.left,e.clientY-r.top,e.deltaY<0?1.14:1/1.14);},{passive:false});
 window.addEventListener('keydown',function(e){
+  if(pmOpen()){if(e.key==='Escape')pmShow(false);return;}
   if(/input|select|textarea/i.test(e.target.tagName)){
     if(e.key==='Enter'&&e.target.id==='knownLen')applyScale();
     return;}
@@ -1256,9 +1327,13 @@ function sbCrop(){
 $('sbApply').addEventListener('click',function(){
   if(!S.scaleBar)return;
   var ft=parseFloat($('sbVal').value);
-  S.ftPerPx=ft/S.scaleBar.len;S.calibFeet=ft;
+  S.ftPerPx=ft/S.scaleBar.len;S.calibFeet=ft;S.scaleConfirmed=true;
+  S.runs=[];
+  if(!S.planes.length)autoFindRoof(true);
+  var nr=finishOff();
   renderPlanes();renderRuns();renderAll();draw();
-  toast('Scale set — '+fmt(S.ftPerPx*12,2)+' in/px. Now trace the roof.');
+  toast('Scale set — '+fmt(S.ftPerPx*12,2)+' in/px'+
+    (S.planes.length?' · '+fmt(totals().plan)+' sf footprint'+(nr?', runs derived':''):' — now trace the roof'));
   setMode('trace');
 });
 
@@ -1268,6 +1343,9 @@ function applyScale(){
   if(!S.calib){toast('Draw the line first',1);setMode('scale');return;}
   if(!(v>0)){toast('Type the length of that line',1);$('knownLen').focus();return;}
   S.calibFeet=v*u;S.ftPerPx=S.calibFeet/dist(S.calib.a,S.calib.b);
+  S.scaleConfirmed=true;S.runs=[];
+  if(!S.planes.length)autoFindRoof(true);
+  finishOff();
   renderPlanes();renderRuns();renderAll();draw();
   toast('Scale set — '+fmt(S.ftPerPx*12,2)+' in/px');
   if(S.mode==='scale')setMode('trace');
@@ -1382,7 +1460,7 @@ $('resetAll').addEventListener('click',function(){
 });
 function reset(){
   S.planes=[];S.runs=[];S.calib=null;S.ftPerPx=null;S.calibFeet=null;S.draft=[];S.sel=null;
-  S.scaleBar=null;S.cands=[];renderScaleBar();renderPlanes();renderRuns();renderAll();
+  S.scaleBar=null;S.cands=[];S.scaleConfirmed=false;S.pitchSource='assumed';S.pitchMeasured=null;renderScaleBar();renderPlanes();renderRuns();renderAll();
 }
 
 /* ══ image ══ */
@@ -1394,7 +1472,14 @@ function loadImage(src,cb){
     setTimeout(function(){
       S.A=buildAnalysis(im);S.scaleBar=detectScaleBar(im);
       S.cands=S.A?detectBuildings():[];
-      renderScaleBar();busy(false);fit();
+      renderScaleBar();
+      /* apply the best reading straight away — everything downstream fills in.
+         it stays flagged as unconfirmed in Checks until the crop is eyeballed. */
+      if(S.scaleBar&&!S.ftPerPx){
+        var pre=parseFloat($('sbVal').value);
+        if(pre>0){S.ftPerPx=pre/S.scaleBar.len;S.calibFeet=pre;S.scaleConfirmed=false;}
+      }
+      busy(false);fit();
       if(cb)cb();
       else{
         setMode('trace');
@@ -1422,7 +1507,129 @@ $('stage').addEventListener('dragover',function(e){e.preventDefault();});
 $('stage').addEventListener('drop',function(e){e.preventDefault();readFile(e.dataTransfer.files[0]);});
 window.addEventListener('paste',function(e){
   var it=(e.clipboardData||{}).items||[];
-  for(var i=0;i<it.length;i++)if(/^image\//.test(it[i].type)){readFile(it[i].getAsFile());return;}
+  for(var i=0;i<it.length;i++)if(/^image\//.test(it[i].type)){
+    var f=it[i].getAsFile();
+    if(pmOpen()){var fr=new FileReader();fr.onload=function(){pmLoad(fr.result);};fr.readAsDataURL(f);}
+    else readFile(f);
+    return;}
+});
+
+
+/* ══ pitch from a photo — the only place slope actually lives ══
+   rake angle against a horizontal reference in the same photo. the reference
+   cancels camera roll; shooting the gable end square-on keeps perspective small. */
+var pm={img:null,z:1,ox:0,oy:0,step:1,a:null,b:null,h1:null,h2:null,drag:null,level:false};
+var pmCv=$('pmCv'),pmCtx=pmCv.getContext('2d');
+function pmOpen(){return $('pmWrap').classList.contains('on');}
+function pmShow(on){
+  $('pmWrap').classList.toggle('on',!!on);
+  if(on&&!pm.img)$('pmMsg').textContent='Paste or drop a photo that shows the gable end side-on — a site photo or a Street View screenshot both work.';
+}
+function pmReset(){pm.step=1;pm.a=pm.b=pm.h1=pm.h2=null;pm.level=false;pm.drag=null;pmDraw();}
+function pmLoad(src){
+  var im=new Image();
+  im.onload=function(){
+    pm.img=im;
+    var maxW=Math.min(660,window.innerWidth-90),maxH=Math.min(430,window.innerHeight-330);
+    pm.z=Math.min(maxW/im.width,maxH/im.height,1);
+    pmCv.width=Math.round(im.width*pm.z);pmCv.height=Math.round(im.height*pm.z);
+    pmCv.style.height=pmCv.height+'px';
+    pmReset();
+  };
+  im.onerror=function(){toast('Could not load that photo',1);};
+  im.src=src;
+}
+function pmXY(e){
+  var r=pmCv.getBoundingClientRect();
+  return {x:(e.clientX-r.left)*(pmCv.width/r.width),y:(e.clientY-r.top)*(pmCv.height/r.height)};
+}
+function pmLine(a,b,col,lbl){
+  pmCtx.beginPath();pmCtx.moveTo(a.x,a.y);pmCtx.lineTo(b.x,b.y);
+  pmCtx.lineWidth=4;pmCtx.strokeStyle='#000';pmCtx.globalAlpha=.5;pmCtx.stroke();pmCtx.globalAlpha=1;
+  pmCtx.lineWidth=2;pmCtx.strokeStyle=col;pmCtx.stroke();
+  [a,b].forEach(function(p){pmCtx.beginPath();pmCtx.arc(p.x,p.y,4.5,0,6.284);
+    pmCtx.fillStyle='#0f1315';pmCtx.fill();pmCtx.lineWidth=2;pmCtx.strokeStyle=col;pmCtx.stroke();});
+  if(lbl){pmCtx.font='600 11px system-ui';pmCtx.fillStyle=col;
+    pmCtx.fillText(lbl,(a.x+b.x)/2+8,(a.y+b.y)/2-6);}
+}
+function pmDraw(){
+  if(!pm.img)return;
+  pmCtx.clearRect(0,0,pmCv.width,pmCv.height);
+  pmCtx.drawImage(pm.img,0,0,pmCv.width,pmCv.height);
+  if(pm.a&&pm.b)pmLine(pm.a,pm.b,'#F2711C','rake');
+  if(pm.h1&&pm.h2)pmLine(pm.h1,pm.h2,'#4FA8E8','level');
+  if(pm.drag&&pm.drag.b)pmLine(pm.drag.a,pm.drag.b,pm.step===1?'#F2711C':'#4FA8E8','');
+  var msg=$('pmMsg');
+  if(pm.step===1)msg.innerHTML='<b>Drag along the rake</b> — the sloping edge of the roof on the gable end.';
+  else if(pm.step===2)msg.innerHTML='<b>Drag along something level</b> — the eave, a siding course, a window sill. This cancels out camera tilt. Or press <b>Camera was level</b>.';
+  else msg.innerHTML='Both lines set. Drag either one again to redo it.';
+  pmOut();
+}
+function pmValue(){
+  if(!pm.a||!pm.b)return null;
+  var rx=pm.b.x-pm.a.x,ry=pm.b.y-pm.a.y,hx=1,hy=0;
+  if(pm.h1&&pm.h2){hx=pm.h2.x-pm.h1.x;hy=pm.h2.y-pm.h1.y;}
+  else if(!pm.level)return null;
+  if(!Math.hypot(rx,ry)||!Math.hypot(hx,hy))return null;
+  var d=Math.abs(Math.atan2(ry,rx)-Math.atan2(hy,hx));
+  while(d>Math.PI)d=Math.abs(d-2*Math.PI);
+  if(d>Math.PI/2)d=Math.PI-d;
+  var r=12*Math.tan(d);
+  return (isFinite(r)&&r>=0&&r<40)?r:null;
+}
+function pmOut(){
+  var v=pmValue(),el=$('pmOut'),btn=$('pmApply');
+  if(v===null){el.innerHTML='';btn.disabled=true;return;}
+  var whole=Math.max(0,Math.min(18,Math.round(v)));
+  el.innerHTML=L('Measured',fmt(v,1)+' / 12')+L('Nearest standard',whole+' / 12')+
+    L('Angle',fmt(Math.atan(v/12)*180/Math.PI,1)+'°');
+  btn.disabled=false;
+}
+pmCv.addEventListener('pointerdown',function(e){
+  if(!pm.img)return;
+  pmCv.setPointerCapture(e.pointerId);
+  pm.drag={a:pmXY(e),b:null};
+});
+pmCv.addEventListener('pointermove',function(e){
+  if(!pm.drag)return;pm.drag.b=pmXY(e);pmDraw();
+});
+pmCv.addEventListener('pointerup',function(e){
+  if(!pm.drag)return;
+  var b=pmXY(e),a=pm.drag.a;pm.drag=null;
+  if(Math.hypot(b.x-a.x,b.y-a.y)<12){pmDraw();return;}
+  if(pm.step===1){pm.a=a;pm.b=b;pm.step=pm.level?3:2;}
+  else{pm.h1=a;pm.h2=b;pm.level=false;pm.step=3;}
+  pmDraw();
+});
+$('pitchPhoto').addEventListener('click',function(){pmShow(true);if(pm.img)pmDraw();});
+$('pmClose').addEventListener('click',function(){pmShow(false);});
+$('pmPick').addEventListener('click',function(){$('pmFile').click();});
+$('pmFile').addEventListener('change',function(e){
+  var f=e.target.files[0];
+  if(f&&/^image\//.test(f.type)){var fr=new FileReader();fr.onload=function(){pmLoad(fr.result);};fr.readAsDataURL(f);}
+  e.target.value='';
+});
+$('pmRedo').addEventListener('click',pmReset);
+$('pmLevel').addEventListener('click',function(){
+  pm.level=true;pm.h1=pm.h2=null;
+  if(pm.a&&pm.b)pm.step=3;
+  pmDraw();
+});
+$('pmApply').addEventListener('click',function(){
+  var v=pmValue();if(v===null)return;
+  S.pitchMeasured=v;S.pitchSource='photo';
+  S.pitch=Math.max(0,Math.min(18,Math.round(v)));
+  S.planes.forEach(function(f){f.pitch=S.pitch;});
+  S.runs=[];finishOff();
+  renderPlanes();renderRuns();renderAll();draw();
+  pmShow(false);
+  toast('Pitch '+fmt(v,1)+'/12 measured — using '+S.pitch+'/12');
+});
+$('pmWrap').addEventListener('dragover',function(e){e.preventDefault();});
+$('pmWrap').addEventListener('drop',function(e){
+  e.preventDefault();
+  var f=e.dataTransfer.files[0];
+  if(f&&/^image\//.test(f.type)){var fr=new FileReader();fr.onload=function(){pmLoad(fr.result);};fr.readAsDataURL(f);}
 });
 
 /* ══ chrome ══ */
