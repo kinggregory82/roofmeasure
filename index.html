@@ -620,6 +620,93 @@ function rectFit(poly,pa){
   }
   return bestA>0?pa/bestA:0;
 }
+/* A driveway is the same "not vegetation" as the roof it touches, so segmentation
+   fuses them. They are not the same TONE though — on his Arthur St shot the roof runs
+   ~105 gray and the drive ~150, while the two roof facets differ by only ~18. Keep the
+   piece the seed sits in, within a window wide enough for a sunlit and a shaded slope. */
+function tonePrune(mask,w,h,seedIdx){
+  var A=S.A,i,n=w*h;
+  function tone(j){return 0.299*A.R[j]+0.587*A.G[j]+0.114*A.B[j];}
+  var sx=seedIdx%w,sy=(seedIdx-sx)/w,vals=[],dx,dy,x,y,j;
+  for(dy=-2;dy<=2;dy++)for(dx=-2;dx<=2;dx++){
+    x=sx+dx;y=sy+dy;
+    if(x<0||y<0||x>=w||y>=h)continue;
+    j=y*w+x;if(!mask[j])continue;
+    vals.push(tone(j));
+  }
+  if(vals.length<6)return mask;
+  vals.sort(function(a,b){return a-b;});
+  var t0=vals[vals.length>>1];
+  var keep=new Uint8Array(n),kept=0,total=0;
+  for(i=0;i<n;i++){
+    if(!mask[i])continue;
+    total++;
+    if(Math.abs(tone(i)-t0)<=34){keep[i]=1;kept++;}
+  }
+  if(!keep[seedIdx]||kept<total*0.25||kept>total*0.94)return mask;
+  var out=new Uint8Array(n),st=[seedIdx],c=0;
+  out[seedIdx]=1;
+  while(st.length){
+    j=st.pop();c++;
+    x=j%w;y=(j-x)/w;
+    if(x>0&&keep[j-1]&&!out[j-1]){out[j-1]=1;st.push(j-1);}
+    if(x<w-1&&keep[j+1]&&!out[j+1]){out[j+1]=1;st.push(j+1);}
+    if(y>0&&keep[j-w]&&!out[j-w]){out[j-w]=1;st.push(j-w);}
+    if(y<h-1&&keep[j+w]&&!out[j+w]){out[j+w]=1;st.push(j+w);}
+  }
+  if(c<total*0.25)return mask;
+  return morph(morph(out,w,h,1,5),w,h,0,5);
+}
+/* The ridge is visible in the picture — a straight brightness break running the length
+   of the roof where the two slopes meet. Find it with a small Hough over the interior
+   gradients, inset from the outline so the eaves cannot win the vote. */
+function detectRidge(pts){
+  var A=S.A;if(!A||!pts||pts.length<3)return null;
+  var P=pts.map(function(p){return{x:p.x*A.s,y:p.y*A.s};});
+  var mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9;
+  P.forEach(function(p){if(p.x<mnx)mnx=p.x;if(p.x>mxx)mxx=p.x;
+    if(p.y<mny)mny=p.y;if(p.y>mxy)mxy=p.y;});
+  var x0=Math.max(1,Math.floor(mnx)),x1=Math.min(A.w-2,Math.ceil(mxx));
+  var y0=Math.max(1,Math.floor(mny)),y1=Math.min(A.h-2,Math.ceil(mxy));
+  var bw=x1-x0,bh=y1-y0;
+  if(bw<26||bh<26)return null;
+  var inset=Math.max(2,Math.round(Math.min(bw,bh)*0.16)),c0=centroid(P);
+  var poly=P.map(function(p){var L=Math.hypot(p.x-c0.x,p.y-c0.y)||1;
+    return {x:p.x+(c0.x-p.x)/L*inset,y:p.y+(c0.y-p.y)/L*inset};});
+  var xs=[],ys=[],ms=[],x,y;
+  for(y=y0;y<=y1;y++)for(x=x0;x<=x1;x++){
+    if(!inPoly({x:x,y:y},poly))continue;
+    xs.push(x);ys.push(y);ms.push(A.mag[y*A.w+x]);
+  }
+  if(xs.length<220)return null;
+  var srt=ms.slice().sort(function(a,b){return a-b;});
+  var thr=srt[Math.floor(srt.length*0.88)];
+  var ex=[],ey=[],i;
+  for(i=0;i<xs.length;i++)if(ms[i]>thr){ex.push(xs[i]);ey.push(ys[i]);}
+  if(ex.length<40)return null;
+  var bestN=0,bestT=0,bestR=0,ti,t,ct,st2,k,r,acc,key;
+  for(ti=0;ti<90;ti++){
+    t=ti*2*Math.PI/180;ct=Math.cos(t);st2=Math.sin(t);
+    acc={};
+    for(k=0;k<ex.length;k++){
+      r=Math.round((ex[k]*ct+ey[k]*st2)/2);
+      acc[r]=(acc[r]||0)+1;
+    }
+    for(key in acc)if(acc[key]>bestN){bestN=acc[key];bestT=t;bestR=key*2;}
+  }
+  ct=Math.cos(bestT);st2=Math.sin(bestT);
+  var tmin=1e9,tmax=-1e9,sup=0,u;
+  for(k=0;k<ex.length;k++){
+    if(Math.abs(ex[k]*ct+ey[k]*st2-bestR)>3)continue;
+    sup++;u=-ex[k]*st2+ey[k]*ct;
+    if(u<tmin)tmin=u;if(u>tmax)tmax=u;
+  }
+  var span=tmax-tmin;
+  if(sup<28||span<Math.max(14,Math.max(bw,bh)*0.42))return null;
+  return {a:{x:(bestR*ct-tmin*st2)/A.s,y:(bestR*st2+tmin*ct)/A.s},
+          b:{x:(bestR*ct-tmax*st2)/A.s,y:(bestR*st2+tmax*ct)/A.s},
+          support:sup,span:span};
+}
 function detectBuildings(){
   var A=S.A;if(!A)return [];
   var w=A.w,h=A.h,n=w*h;
@@ -628,6 +715,11 @@ function detectBuildings(){
      it gets rejected below only when a blob is mostly pin. */
   var pinBox=S.pin?{x0:S.pin.x0*A.s,y0:S.pin.y0*A.s,
     x1:(S.pin.x0+S.pin.w)*A.s,y1:S.pin.y*A.s}:null;
+  var seedIdx=-1;
+  if(S.pin){
+    var sxA=Math.round(S.pin.x*A.s),syA=Math.round((S.pin.y+Math.max(2,S.pin.h*0.14))*A.s);
+    if(sxA>=0&&syA>=0&&sxA<w&&syA<h)seedIdx=syA*w+sxA;
+  }
   m=morph(m,w,h,0,3);m=morph(m,w,h,1,3);   /* open  — drop speckle */
   m=morph(m,w,h,1,5);m=morph(m,w,h,0,5);   /* close — bridge ridge lines and vents */
   var lab=new Int32Array(n),id=0,cands=[],minA=n*0.0015,maxA=n*0.22;
@@ -665,6 +757,7 @@ function detectBuildings(){
     if(bw/bh>5||bh/bw>5)continue;           /* long thin things are pavement */
     var sub=new Uint8Array(n);
     for(var k=0;k<px.length;k++)sub[px[k]]=1;
+    if(seedIdx>=0&&sub[seedIdx])sub=tonePrune(sub,w,h,seedIdx);
     var poly=maskToPoly(sub,w,h);
     if(!poly)continue;
     if(poly.length>26)continue;             /* buildings tidy up; sprawl does not */
@@ -1132,8 +1225,12 @@ function deriveRuns(quiet){
     }else{
       var E1=planeEdges(f,0),bi=0;
       for(i=1;i<E1.length;i++)if(E1[i].L>E1[bi].L)bi=i;
+      /* read the ridge off the image rather than leaving it out entirely */
+      var rg=type!=='flat'?detectRidge(f.pts):null;
+      var refA=rg?Math.atan2(rg.b.y-rg.a.y,rg.b.x-rg.a.x):E1[bi].ang;
+      if(rg)made.push([rg.a,rg.b,'ridge']);
       E1.forEach(function(e){
-        made.push([e.a,e.b,type==='gable'?(parallelish(e.ang,E1[bi].ang,25)?'eave':'rake'):'eave']);
+        made.push([e.a,e.b,type==='gable'?(parallelish(e.ang,refA,25)?'eave':'rake'):'eave']);
       });
     }
   }else{
@@ -1162,6 +1259,11 @@ function deriveRuns(quiet){
     });
   }
   if(!made.length||made.length>60){if(!quiet)toast('Could not derive runs from those shapes',1);return 0;}
+  if(type!=='flat'&&!made.some(function(m){return m[2]==='ridge';})){
+    var big=ps[0];ps.forEach(function(f){if(areaPx(f.pts)>areaPx(big.pts))big=f;});
+    var rg2=detectRidge(big.pts);
+    if(rg2)made.push([rg2.a,rg2.b,'ridge']);
+  }
   S.runs=[];
   made.forEach(function(m){addRun(m[0],m[1],m[2]);});
   S.sel=null;renderRuns();renderAll();draw();
