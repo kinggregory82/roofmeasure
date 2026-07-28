@@ -241,12 +241,14 @@ details.card>summary .tag.hot{color:var(--good)}
           <input class="inp" id="addr" placeholder="1247 N Van Dyke Rd, Bad Axe MI"></div>
         <div class="row" style="margin-bottom:9px">
           <div class="field" style="margin:0"><label>Imagery</label>
-            <select class="inp" id="tileSrc"><option value="esri">Esri — to z21</option><option value="usgs">USGS — z19 max</option></select></div>
+            <select class="inp" id="tileSrc"><option value="esri">Esri — to z21</option><option value="michigan">Michigan 12 in — z19</option><option value="usgs">USGS — z19 max</option><option value="custom">Custom tiles…</option></select></div>
           <div class="field" style="flex:0 0 76px;margin:0"><label>Detail</label>
             <select class="inp" id="tileZ"><option value="19">z19</option><option value="20">z20</option><option value="21" selected>z21</option></select></div>
           <div class="field" style="flex:0 0 76px;margin:0"><label>Across</label>
             <select class="inp" id="tileSpan"><option value="150">150ft</option><option value="250" selected>250ft</option><option value="400">400ft</option><option value="700">700ft</option></select></div>
         </div>
+        <div class="field" id="customWrap" style="display:none"><label>Tile URL template</label>
+          <input class="inp" id="customUrl" placeholder="https://…/MapServer/tile/{z}/{y}/{x}"></div>
         <button class="btn auto" id="geoGo">Find it and pull the imagery</button>
         <button class="btn" id="gmapsBtn" style="margin-top:6px;display:none">Open this spot in Google Maps →</button>
         <div class="tot" id="geoOut" style="margin-top:8px"></div>
@@ -268,6 +270,8 @@ details.card>summary .tag.hot{color:var(--good)}
         </div>
         <button class="btn" id="applyScale">Apply to drawn line</button>
         <button class="btn ghost" id="ocrBtn" style="margin-top:6px">Read the label off the image</button>
+        <p class="note" style="margin-top:10px"><b>Rural address coming back coarse?</b> Esri falls back to metre-scale NAIP outside towns. <b>Michigan statewide</b> is 12-inch orthoimagery flown by the state — same z19 grid, but real detail rather than an upsample. Try it first. If it is still not enough, use <b>Open this spot in Google Maps</b>, zoom until the roof fills the screen, screenshot, paste here, then copy the URL out of Google's address bar and set the scale from it.</p>
+        <p class="note"><b>Custom tiles</b> takes any <b>Web Mercator</b> XYZ or ArcGIS cache — put {z}, {x} and {y} in the template. County caches published in State Plane will not line up and are not usable here.</p>
         <p class="note" id="ocrNote">Where Esri has no coverage, use <b>Open this spot in Google Maps</b>, screenshot what you see, and paste it back with Ctrl+V — the scale is already worked out from the link. Capture multiplier is read off your display.</p>
       </div>
     </details>
@@ -1524,6 +1528,9 @@ $('scaleFromUrl').addEventListener('click',scaleFromUrl);
 
 /* ══════════════════ address → scaled imagery ══════════════════ */
 var TILES={
+  custom:{url:'',name:'Custom tiles',max:23},
+  michigan:{url:'https://imagery.michigan.gov/server/rest/services/Michigan_imagery_public/MapServer/tile/{z}/{y}/{x}',
+        name:'Michigan statewide (12 in)',max:19},
   esri:{url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         name:'Esri World Imagery',max:21},
   usgs:{url:'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
@@ -1564,6 +1571,11 @@ function mPerPx(lat,z){return 156543.03392*Math.cos(lat*Math.PI/180)/Math.pow(2,
 
 function fetchImagery(g,z,spanFt,key,cb){
   var prov=TILES[key],asked=z;
+  if(key==='custom'){
+    var tpl=$('customUrl').value.trim();
+    if(!/\{z\}/.test(tpl)||!/\{x\}/.test(tpl)||!/\{y\}/.test(tpl)){cb('badtpl');return;}
+    prov={url:tpl,name:'Custom tiles',max:23};
+  }
   if(z>prov.max)z=prov.max;
   var ftPx=mPerPx(g.lat,z)*3.280839895;
   var W=Math.min(2200,Math.max(400,Math.round(spanFt/ftPx)));
@@ -1633,6 +1645,7 @@ function goAddress(){
     if(!$('mapUrl').value)$('mapUrl').value=googleUrl();
     renderGeo(null);
     var z=parseInt($('tileZ').value,10),span=parseInt($('tileSpan').value,10),key=$('tileSrc').value;
+    var wanted=z;
     busy(true,'Pulling imagery');
     var tries=0;
     (function attempt(zz){
@@ -1645,9 +1658,11 @@ function goAddress(){
       busy(false);
       if(e2){
         var msg={toobig:'That area needs too many tiles — pick a smaller span or less detail',
+          badtpl:'The tile URL needs {z}, {x} and {y} placeholders in it',
           blocked:'The imagery service could not be reached from here. Open this file directly in a browser, or drop in a screenshot instead.',
           tainted:'The imagery loaded but the browser will not let it be measured. Drop in a screenshot instead.'}[e2]||'Imagery failed';
         toast(msg,1);renderGeo(null);return;}
+      r.wanted=wanted;
       resetMeasurements();
       loadImage(r.url,function(){
         S.ftPerPx=r.ftPerPx;S.calibFeet=r.ftPerPx*r.w;S.scaleSource='tiles';S.tileZ=r.z;
@@ -1656,10 +1671,10 @@ function goAddress(){
         renderGeo(r);renderFacets();renderRuns();renderTotals();renderPitchOut();fit();
         setMode('wand');openStep('step2');
         S.blankTiles=r.blank;S.tileTotal=r.total;
-        if(r.key==='usgs'&&r.asked>r.z)
+        if(r.key==='usgs'&&r.wanted>r.z)
           toast('USGS tops out at z'+r.z+' — '+fmt(r.ftPerPx*12,1)+' in/px. Switch Imagery to Esri for finer.',1);
-        else if(r.asked>r.z)
-          toast('Best published here is z'+r.z+' — '+fmt(r.ftPerPx*12,1)+' in/px',1);
+        else if(r.wanted>r.z)
+          toast('No z'+r.wanted+' imagery published here — z'+r.z+' is the ceiling. Try the Google Maps route below.',1);
         else if(r.failed+r.blank)
           toast((r.failed+r.blank)+' of '+r.total+' tiles have no imagery',1);
         else toast('Scaled at '+fmt(r.ftPerPx*12,2)+' in/px — click a roof plane');
@@ -1686,13 +1701,16 @@ function renderGeo(r){
     tl('Coordinates',S.geo.lat.toFixed(5)+', '+S.geo.lng.toFixed(5))+
     tl('Lookup',S.geo.src);
   if(r)h2+=tl('Imagery',r.provider)+
-    tl('Detail',r.asked>r.z?('z'+r.z+' — no z'+r.asked+' here'):('z'+r.z))+
+    tl('Detail',(r.wanted||r.asked)>r.z?
+        ('z'+r.z+' — no z'+(r.wanted||r.asked)+' published here'):('z'+r.z))+
     tl('Resolution',fmt(r.ftPerPx*12,2)+' in/px')+
     tl('Image size',r.w+' × '+r.h+' px')+
     tl('Ground covered',fmt(r.w*r.ftPerPx)+' × '+fmt(r.h*r.ftPerPx)+' ft');
   el.innerHTML=h2;
   $('geoTag').textContent=r?'scaled':'located';
 }
+$('tileSrc').addEventListener('change',function(e){
+  $('customWrap').style.display=e.target.value==='custom'?'':'none';});
 $('geoGo').addEventListener('click',goAddress);
 $('addr').addEventListener('keydown',function(e){if(e.key==='Enter')goAddress();});
 
