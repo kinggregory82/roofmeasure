@@ -1105,7 +1105,16 @@ function renderAll(){
   var oh=parseFloat($('overhang').value)||1,capLf=parseFloat($('capLf').value)||25;
   var r=t.runs,cap=r.ridge+r.hip,eave=r.eave,rake=r.rake;
   var iwW=oh*slope(S.pitch)+2,iwRows=Math.max(1,Math.ceil(iwW/2.95));
-  $('totals').innerHTML=has?[
+  var warn='';
+  if(has){
+    var bigP=0;onPlanes().forEach(function(f){var a2=fPlan(f);if(a2>bigP)bigP=a2;});
+    if(bigP>9000||bigP<400)
+      warn='<div style="background:#3a1414;border:1px solid var(--bad);border-radius:4px;'+
+        'padding:7px 9px;margin-bottom:8px;color:var(--bad);font-size:11.5px;line-height:1.5">'+
+        '<b>Do not order off this.</b> The largest plane works out to '+fmt(bigP)+' sf, which is not a '+
+        'roof. The scale is wrong — check step 1.</div>';
+  }
+  $('totals').innerHTML=has?[warn,
     L('Plan footprint',fmt(t.plan)+' sf'),
     L('Roof surface',fmt(t.area)+' sf'),
     L('Measured',fmt(t.sq,2)+' sq'),
@@ -1141,6 +1150,16 @@ function checks(){
       ? 'Scale bar found but not read yet — none of the standard readings gave a believable building. Read it off the crop in step 1 and pick it.'
       : 'No scale set. Nothing can be computed until there is one.');
     else{
+      if(S.scaleBar&&S.calibFeet){
+        var fromBar=null,i2;
+        for(i2=0;i2<SBVALS.length;i2++){
+          var r2=(SBVALS[i2][0]/S.scaleBar.len)/S.ftPerPx;
+          if(r2>0.93&&r2<1.07)fromBar=SBVALS[i2][1];
+        }
+        if(!fromBar)add('bad','The scale in use ('+fmt(S.ftPerPx*12,2)+' in/px) does not match the '+
+          S.scaleBar.len+' px bar found in this shot under ANY standard reading — that bar would have to '+
+          'say '+fmt(S.ftPerPx*S.scaleBar.len,0)+' ft. Something set the scale by hand. Re-tap the reading in step 1.');
+      }
       if(S.scaleBar&&!S.scaleConfirmed)
         add('warn','Scale was read off the bar automatically as '+fmt(S.calibFeet,0)+
           ' ft. Check it against the crop in step 1 — everything on this page is multiplied by it.');
@@ -1456,11 +1475,14 @@ function detectScaleBar(img){
   function isLine(px,py){
     var v=g(px,py);
     if(v<140)return false;
-    var u=255,dn=255,k,a,b;
+    var u=255,dn=255,k,a,b,seenU=0,seenD=0;
     for(k=3;k<=7;k++){
-      a=g(px,py-k<0?0:py-k);if(a<u)u=a;
-      b=g(px,py+k>=h?h-1:py+k);if(b<dn)dn=b;
+      if(py-k>=0){a=g(px,py-k);if(a<u)u=a;seenU++;}
+      if(py+k<h){b=g(px,py+k);if(b<dn)dn=b;seenD++;}
     }
+    if(!seenU&&!seenD)return false;
+    if(!seenU)u=dn;
+    if(!seenD)dn=u;
     return v-(u>dn?u:dn)>60;
   }
   /* how tall the bright run through this pixel is */
@@ -1469,6 +1491,14 @@ function detectScaleBar(img){
     while(u<40&&py-u-1>=0&&g(px,py-u-1)>140)u++;
     while(dn<40&&py+dn+1<h&&g(px,py+dn+1)>140)dn++;
     return u+dn+1;
+  }
+  function hasLabel(xa,ya,ln){
+    var bw=Math.max(55,Math.round(ln*1.1));
+    var x2=Math.max(0,xa-bw),xe=Math.max(x2+1,xa-3);
+    var y2=Math.max(0,ya-11),ye=Math.min(h,ya+4);
+    var cnt=0,tot=0,xx,yy;
+    for(yy=y2;yy<ye;yy++)for(xx=x2;xx<xe;xx++){tot++;if(g(xx,yy)>150)cnt++;}
+    return tot>200&&cnt/tot>=0.09;
   }
   function endTick(xa,ya,dir){
     var bx=xa,bh=0,k,x2,hh;
@@ -1480,8 +1510,11 @@ function detectScaleBar(img){
     }
     return {x:bx,h:bh};
   }
+  /* scan to the last row — a screenshot cropped tight to the map window puts the bar
+     within a few px of the bottom edge, and stopping short of it misses the bar entirely.
+     g() reads are clamped, so sampling near the edge is safe. */
   var y0=Math.max(8,Math.floor(h*0.55)),x0=Math.floor(w*0.15),best=null,y,px;
-  for(y=y0;y<h-8;y++){
+  for(y=y0;y<h;y++){
     px=x0;
     while(px<w){
       if(!isLine(px,y)){px++;continue;}
@@ -1491,12 +1524,19 @@ function detectScaleBar(img){
       if(L<30||L>w*0.45)continue;
       /* the scale bar is a hairline. a panel edge or a thumbnail border is thicker,
          and its ends turn into long vertical borders instead of short ticks. */
-      if(vext((s2+e2)>>1,y)>5)continue;
+      if(vext((s2+e2)>>1,y)>Math.max(3,Math.round(L*0.035)))continue;
       var t1=endTick(s2,y,-1),t2=endTick(e2,y,1);
       if(t1.h<2||t1.h>14||t2.h<2||t2.h>14)continue;
       var cand={x1:t1.x,x2:t2.x,y:y,len:t2.x-t1.x};
       if(cand.len<25)continue;
-      /* Google prints it at the very bottom, below any thumbnail or panel */
+      /* Google always prints the value immediately left of the bar. Requiring that
+         label is what separates the real bar from a bright field edge or the top of
+         the attribution strip, both of which are bare. Without a label there is
+         nothing to read anyway. */
+      if(!hasLabel(cand.x1,y,cand.len))continue;
+      /* lowest labelled hairline wins — Google prints the bar below the Street View
+         thumbnail and any panel. The label test above is what stops that rule from
+         handing it to a bright field edge nearer the bottom of the frame. */
       if(!best||cand.y>best.y+3||(Math.abs(cand.y-best.y)<=3&&cand.len>best.len))best=cand;
     }
   }
@@ -1530,6 +1570,15 @@ function detectPin(img){
     if(cnt<120||cnt>4000)continue;
     if(bh<bw||bh>bw*2.2)continue;               /* a pin is a teardrop, taller than wide */
     if(cnt<bw*bh*0.45)continue;
+    /* Maps' compass needle is also a red teardrop — but it points UP. A pin has a round
+       head on top and a point at the bottom, so its lower third is the narrow end. */
+    var band=Math.max(1,Math.floor(bh/3)),topW=0,botW=0,yy,xx,q;
+    for(yy=0;yy<band;yy++)for(xx=0;xx<bw;xx++){
+      q=(y0+yy)*w+(x0+xx);if(seen[q]&&red(q))topW++;
+      q=(y1-yy)*w+(x0+xx);if(seen[q]&&red(q))botW++;
+    }
+    if(topW<band*1.5)continue;
+    if(botW>topW*0.7)continue;
     if(!best||cnt>best.n)best={n:cnt,x0:x0,y0:y0,w:bw,h:bh,
       x:x0+bw/2,y:y1};                          /* the tip is the anchor */
   }
