@@ -156,6 +156,7 @@ details.sec[open]>summary{margin-bottom:10px}
       <button class="tool on" data-mode="trace"><span class="dot" style="background:var(--paint)"></span>Trace<kbd>T</kbd></button>
       <button class="tool" data-mode="wand"><span class="dot" style="background:var(--good)"></span>Auto<kbd>A</kbd></button>
       <button class="tool" data-mode="run"><span class="dot" style="background:var(--tape)"></span>Run<kbd>R</kbd></button>
+      <button class="tool" data-mode="lasso"><span class="dot" style="background:var(--paint)"></span>Lasso<kbd>L</kbd></button>
       <button class="tool" data-mode="edit"><span class="dot" style="background:var(--dim)"></span>Edit<kbd>E</kbd></button>
     </div>
     <div class="sp"></div>
@@ -224,6 +225,10 @@ details.sec[open]>summary{margin-bottom:10px}
       <div class="row" style="margin-bottom:9px">
         <button class="btn ghost" id="addPlaneBtn">+ Add a plane</button>
         <button class="btn ghost" id="editPlaneBtn">Edit points</button>
+        <button class="btn ghost" id="clearPlanesBtn" style="flex:0 0 62px">Clear</button>
+      </div>
+      <div class="row" style="margin-bottom:9px">
+        <button class="btn alt" id="lassoBtn">Draw round the roof</button>
       </div>
       <p class="note" id="editHint" style="margin:-4px 0 9px"></p>
       <div class="list" id="planeList"></div>
@@ -1057,6 +1062,30 @@ function afterShapeEdit(){
   renderPlanes();renderRuns();renderAll();draw();
 }
 
+/* ══ lasso ══
+   He circled the roof of a complex house by hand in about a second, on a property where
+   automatic detection had ZERO overlap with the truth. So let him do exactly that here:
+   drag a freehand loop and simplify it into a plane. Douglas-Peucker at ~0.4% of the
+   loop's own size holds the area to a fraction of a percent while cutting a many-hundred
+   point scribble down to something that can still be nudged in Edit. */
+function closeLasso(pts){
+  if(!pts||pts.length<8){toast('Draw a loop right round the roof',1);return;}
+  var mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9;
+  pts.forEach(function(p){if(p.x<mnx)mnx=p.x;if(p.x>mxx)mxx=p.x;
+    if(p.y<mny)mny=p.y;if(p.y>mxy)mxy=p.y;});
+  var span=Math.max(mxx-mnx,mxy-mny);
+  if(span<12){toast('That loop is too small',1);return;}
+  var eps=Math.max(1.2,span*0.008);   /* measured: same area accuracy as 0.4% with half the points */
+  var simple=dp(pts.slice(),eps);
+  if(simple.length>3&&dist(simple[0],simple[simple.length-1])<eps*1.5)simple.pop();
+  if(simple.length<3){toast('Could not make a shape out of that',1);return;}
+  addPlane(simple);
+  S.sel={t:'p',id:S.planes[S.planes.length-1].id};
+  afterShapeEdit();
+  toast('Traced '+simple.length+' points'+(S.ftPerPx?' · '+fmt(totals().plan)+' sf':'')+
+    ' — switch to Edit to nudge any corner');
+}
+
 /* ══ measures ══ */
 function fPlan(f){return S.ftPerPx?areaPx(f.pts)*S.ftPerPx*S.ftPerPx:0;}
 function fArea(f){return fPlan(f)*slope(f.pitch);}
@@ -1175,6 +1204,12 @@ function draw(){
     ctx.lineWidth=1.8;ctx.strokeStyle='#4FA8E8';ctx.stroke();
     tick(a,b);tick(b,a);dot(a,'#4FA8E8',false);dot(b,'#4FA8E8',false);
     if(S.calibFeet)tag((a.x+b.x)/2,(a.y+b.y)/2,'SCALE',fmt(S.calibFeet,2)+' ft','#4FA8E8');
+  }
+  if(drag&&drag.t==='lasso'&&drag.pts.length>1){
+    var lsp=drag.pts.map(toS);
+    ctx.beginPath();lsp.forEach(function(p,i){i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y);});
+    ctx.lineWidth=3.5;ctx.strokeStyle='#000';ctx.globalAlpha=.45;ctx.stroke();ctx.globalAlpha=1;
+    ctx.lineWidth=2;ctx.strokeStyle='#F2711C';ctx.stroke();
   }
   if(S.draft.length){
     var col=S.mode==='scale'?'#4FA8E8':S.mode==='run'?'#D9C67A':'#F2711C';
@@ -1686,6 +1721,7 @@ cv.addEventListener('pointerdown',function(e){
   var r=cv.getBoundingClientRect(),sx=e.clientX-r.left,sy=e.clientY-r.top,ip=toI(sx,sy);
   if(e.button===2||e.button===1||space){drag={t:'pan',sx:sx,sy:sy,px:S.px,py:S.py};return;}
   if(e.button!==0)return;
+  if(S.mode==='lasso'){drag={t:'lasso',pts:[ip]};draw();return;}
   if(S.mode==='wand'){runWand(ip);return;}
   if(!S.draft.length){
     /* a "+" on an edge of the selected plane inserts a point and starts dragging it */
@@ -1731,6 +1767,10 @@ cv.addEventListener('pointermove',function(e){
   mouseImg=toI(sx,sy);
   if(drag){
     if(drag.t==='pan'){S.px=drag.px+(sx-drag.sx);S.py=drag.py+(sy-drag.sy);}
+    else if(drag.t==='lasso'){
+      var lp=drag.pts[drag.pts.length-1];
+      if(Math.hypot(mouseImg.x-lp.x,mouseImg.y-lp.y)>2.2)drag.pts.push(mouseImg);
+    }
     else if(drag.t==='body'){
       var dxi=mouseImg.x-drag.start.x,dyi=mouseImg.y-drag.start.y;
       drag.f.pts.forEach(function(q,qi){q.x=drag.orig[qi].x+dxi;q.y=drag.orig[qi].y+dyi;});
@@ -1746,7 +1786,8 @@ cv.addEventListener('pointermove',function(e){
   draw();
 });
 window.addEventListener('pointerup',function(){
-  if(drag&&(drag.t==='v'||drag.t==='body'))afterShapeEdit();
+  if(drag&&drag.t==='lasso')closeLasso(drag.pts);
+  else if(drag&&(drag.t==='v'||drag.t==='body'))afterShapeEdit();
   drag=null;});
 cv.addEventListener('contextmenu',function(e){
   e.preventDefault();
@@ -1771,6 +1812,7 @@ window.addEventListener('keydown',function(e){
   if(k==='a')setMode('wand');
   if(k==='r')setMode('run');
   if(k==='e')setMode('edit');
+  if(k==='l')setMode('lasso');
   if(k==='f')fit();
   if(e.key==='Escape'){S.draft=[];draw();guide();}
   if(e.key==='Enter'&&S.mode==='trace')closePlane();
@@ -1924,6 +1966,8 @@ function editHint(){
     el.innerHTML='Placing points — click the first one again or press <b>Enter</b> to close, <b>Backspace</b> to undo the last.';
   else if(S.mode==='edit'&&S.sel&&S.sel.t==='p')
     el.innerHTML='Drag a corner to move it. Click a <b>+</b> on an edge to add one. Right-click a corner to remove it. Drag inside to move the whole plane. <b>Del</b> removes it.';
+  else if(S.mode==='lasso')
+    el.innerHTML='Hold down and draw a loop right round the roof, then let go. Tidy it in <b>Edit</b> after.';
   else if(S.mode==='edit')
     el.innerHTML='Click a plane to select it.';
   else el.innerHTML='';
@@ -2064,6 +2108,17 @@ $('deriveBtn').addEventListener('click',function(){deriveRuns(false);});
 $('wandBtn').addEventListener('click',function(){
   S.cands=detectBuildings();
   if(!autoFindRoof(false)){setMode('wand');toast('Nothing found — click on the roof yourself',1);}
+});
+$('lassoBtn').addEventListener('click',function(){
+  setMode('lasso');
+  toast('Hold the mouse down and draw a loop right round the roof, then let go');
+});
+$('clearPlanesBtn').addEventListener('click',function(){
+  if(!S.planes.length&&!S.runs.length){toast('Nothing to clear',1);return;}
+  S.planes=[];S.runs=[];S.sel=null;S.draft=[];S.runsTouched=false;
+  renderPlanes();renderRuns();renderAll();draw();
+  setMode('trace');
+  toast('Cleared. Click corners to trace it yourself.');
 });
 $('addPlaneBtn').addEventListener('click',function(){
   S.draft=[];setMode('trace');
