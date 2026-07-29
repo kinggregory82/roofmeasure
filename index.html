@@ -763,7 +763,7 @@ function subjectFromPin(m,lab,w,h,n,A){
   var nb={};
   for(key in adj){var pr=key.split('_'),p=+pr[0],q=+pr[1];
     (nb[p]=nb[p]||[]).push(q);(nb[q]=nb[q]||[]).push(p);}
-  var inSet={},total=cntL[L0],toneSum=sumL[L0],queue=[L0];
+  var inSet={},total=cntL[L0],toneRef=sumL[L0]/cntL[L0],queue=[L0];
   inSet[L0]=1;
   var maxA=n*0.22,guard=0;
   while(queue.length&&guard++<4000){
@@ -772,9 +772,18 @@ function subjectFromPin(m,lab,w,h,n,A){
       var L2=list[z];
       if(inSet[L2])continue;
       if(cntL[L2]<12)continue;
-      if(Math.abs(sumL[L2]/cntL[L2]-toneSum/total)>22)continue;   /* facet yes, pavement no */
+      /* Asymmetric on purpose. On a big house the roof's own spread from a lit slope to
+         a shadowed one measured 59 gray levels — WIDER than the 52 to its driveway — so
+         no symmetric window can separate them. But shadow only ever makes a roof darker,
+         while pavement is brighter. So allow a long reach downward, a short one up. */
+      /* Measure against the SEED fragment, not the running group mean. Against a moving
+         mean the group walks: roof 100 -> 122 -> 144 -> 166, every step inside the limit,
+         and it ends up on the patio. On the big house that drift filled 65% of the traced
+         outline with paving. Anchoring the reference stops it. */
+      var dTone=sumL[L2]/cntL[L2]-toneRef;
+      if(dTone>22||dTone<-60)continue;
       if(total+cntL[L2]>maxA)continue;
-      inSet[L2]=1;total+=cntL[L2];toneSum+=sumL[L2];
+      inSet[L2]=1;total+=cntL[L2];
       queue.push(L2);
     }
   }
@@ -801,9 +810,15 @@ function detectBuildings(){
   var pinAx=S.pin?Math.round(S.pin.x*A.s):0,pinAy=S.pin?Math.round(S.pin.y*A.s):0;
   var pinPt=S.pin?{x:pinAx,y:pinAy}:null;
   var pinRad=S.pin?Math.max(8,Math.round(S.pin.h*A.s*1.5)):0;
+  function toneOf(k){return 0.299*A.R[k]+0.587*A.G[k]+0.114*A.B[k];}
+  /* Google's pin marks the ADDRESS, not the roof. On the big house it lands on a pale
+     walkway between roof sections — gray 187 where the roof is 73 — and seeding there
+     made the prune keep the paving and throw the roof away. Roofing is darker than
+     concrete, pavers and gravel in every image measured here, so when the tone around
+     the pin splits into two populations, seed from the DARKER one. */
   function seedFor(sub){
     if(!S.pin)return -1;
-    var r,dx,dy,x,y,k;
+    var r,dx,dy,x,y,k,vals=[],near=[];
     for(r=0;r<=pinRad;r++)for(dy=-r;dy<=r;dy++)for(dx=-r;dx<=r;dx++){
       if(Math.max(Math.abs(dx),Math.abs(dy))!==r)continue;
       x=pinAx+dx;y=pinAy+dy;
@@ -811,9 +826,30 @@ function detectBuildings(){
       k=y*w+x;
       if(!sub[k])continue;
       if(A.R[k]>120&&A.R[k]-A.G[k]>55&&A.R[k]-A.B[k]>55)continue;
-      return k;
+      near.push(k);vals.push(toneOf(k));
     }
-    return -1;
+    if(!near.length)return -1;
+    if(near.length<40)return near[0];
+    /* Otsu over the tones in reach of the pin */
+    var HB2=64,lo2=0,hi2=256,hh=new Float64Array(HB2),z,tt=vals.length;
+    for(z=0;z<tt;z++){var b2=Math.floor(vals[z]/hi2*HB2);if(b2<0)b2=0;if(b2>=HB2)b2=HB2-1;hh[b2]++;}
+    var mid2=function(q){return (q+0.5)*hi2/HB2;},mT2=0;
+    for(z=0;z<HB2;z++)mT2+=hh[z]*mid2(z);
+    var w02=0,m02=0,bv=-1,cut2=-1;
+    for(z=0;z<HB2;z++){
+      w02+=hh[z];m02+=hh[z]*mid2(z);
+      var w12=tt-w02;
+      if(w02<=0||w12<=0)continue;
+      var d2=mT2*w02/tt-m02,v2=d2*d2/(w02*w12/tt);
+      if(v2>bv){bv=v2;cut2=mid2(z);}
+    }
+    if(cut2<0)return near[0];
+    var darkN=0;
+    for(z=0;z<tt;z++)if(vals[z]<=cut2)darkN++;
+    /* only move if the darker population is substantial — otherwise the pin is fine */
+    if(darkN<tt*0.15)return near[0];
+    for(z=0;z<near.length;z++)if(vals[z]<=cut2)return near[z];
+    return near[0];
   }
   var lab=new Int32Array(n),id=0,cands=[],minA=n*0.0015,maxA=n*0.22,capA=n*0.92;
   for(i=0;i<n;i++){
@@ -1325,6 +1361,31 @@ function checks(){
   }
   var bad=S.planes.filter(function(f){return selfIntersects(f.pts);});
   if(bad.length)add('bad',bad.length+' outline crosses over itself — the area is wrong until it is fixed.');
+  /* An outline that is mostly bright is mostly paving. On the big house 65% of the
+     traced area was courtyard and walkway at 187-216 gray against roofing at 73, and
+     nothing else in the pipeline noticed — the footprint just came out inflated. */
+  if(S.A&&onPlanes().length){
+    onPlanes().forEach(function(f){
+      if(!f.pts||f.pts.length<3)return;
+      var A=S.A,P=f.pts.map(function(p){return{x:p.x*A.s,y:p.y*A.s};});
+      var mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9;
+      P.forEach(function(p){if(p.x<mnx)mnx=p.x;if(p.x>mxx)mxx=p.x;
+        if(p.y<mny)mny=p.y;if(p.y>mxy)mxy=p.y;});
+      var step=Math.max(1,Math.round(Math.min(mxx-mnx,mxy-mny)/60));
+      var inside=0,bright=0,x,y,k,g;
+      for(y=Math.max(0,Math.floor(mny));y<=Math.min(A.h-1,mxy);y+=step)
+        for(x=Math.max(0,Math.floor(mnx));x<=Math.min(A.w-1,mxx);x+=step){
+          if(!inPoly({x:x,y:y},P))continue;
+          k=y*A.w+x;inside++;
+          g=0.299*A.R[k]+0.587*A.G[k]+0.114*A.B[k];
+          if(g>150)bright++;
+        }
+      if(inside>50&&bright/inside>0.45)
+        add('bad',f.name+' is '+Math.round(bright/inside*100)+'% bright surface — that reads as '+
+          'concrete, pavers or gravel, not roofing. The outline has almost certainly swallowed '+
+          'a patio or drive, so its area is too big. Trim it in Edit, or trace that one by hand.');
+    });
+  }
   if(S.ftPerPx&&onPlanes().length){
     var big=0;
     onPlanes().forEach(function(f){var a=fPlan(f);if(a>big)big=a;});
