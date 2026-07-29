@@ -503,17 +503,34 @@ function buildAnalysis(img){
     ui[q]=(hi>217&&(hi-lo)/(hi||1)<0.12)?1:0;
     built[q]=hi>52?1:0;                 /* provisional: not shadow */
   }
-  /* Greenness alone only works in leaf-on imagery. Dormant Michigan grass reads
-     ExG +0.03 against a summer lawn's +0.09, so a fixed 0.05 cutoff calls the whole
-     yard a building — one blob covering 72% of the frame and nothing detectable in it.
-     Walk the cutoff down until what is left could plausibly be roofs and pavement. */
-  var CUT=[0.05,0.035,0.02,0.01,0.0,-0.015],ci,t,bc,best=CUT[CUT.length-1];
-  for(ci=0;ci<CUT.length;ci++){
-    t=CUT[ci];bc=0;
-    for(q=0;q<n;q++)if(built[q]&&exg[q]<=t)bc++;
-    if(bc/n<=0.45){best=t;break;}
-    if(ci===CUT.length-1)best=t;
+  /* Where the vegetation/built split sits is a property of the image, not a constant.
+     Leaf-on grass reads ExG ~+0.09, dormant grass ~+0.03, roofs near or below zero.
+     Otsu finds the valley between those two populations from the data. An earlier
+     version forced the built fraction below 45%, which is wrong for a frame that is
+     genuinely 65% building — it drove the cutoff down until the roof itself counted
+     as grass. Clamped to the band the regression images were tuned on. */
+  var HB=120,HLO=-0.30,HHI=0.30,hist=new Float64Array(HB),tot=0,bi;
+  for(q=0;q<n;q++){
+    if(!built[q])continue;
+    bi=Math.floor((exg[q]-HLO)/(HHI-HLO)*HB);
+    if(bi<0)bi=0; if(bi>=HB)bi=HB-1;
+    hist[bi]++;tot++;
   }
+  var best=0.05;
+  if(tot>0){
+    var mid=function(z){return HLO+(z+0.5)*(HHI-HLO)/HB;};
+    var mT=0;for(bi=0;bi<HB;bi++)mT+=hist[bi]*mid(bi);
+    var w0=0,m0=0,bestV=-1;
+    for(bi=0;bi<HB;bi++){
+      w0+=hist[bi];m0+=hist[bi]*mid(bi);
+      var w1=tot-w0;
+      if(w0<=0||w1<=0)continue;
+      var dd=mT*w0/tot-m0,vv=dd*dd/(w0*w1/tot);
+      if(vv>bestV){bestV=vv;best=mid(bi);}
+    }
+  }
+  if(best<-0.02)best=-0.02;
+  if(best>0.05)best=0.05;
   for(q=0;q<n;q++){
     veg[q]=exg[q]>best?1:0;
     if(veg[q])built[q]=0;
@@ -643,7 +660,7 @@ function tonePrune(mask,w,h,seedIdx){
     total++;
     if(Math.abs(tone(i)-t0)<=34){keep[i]=1;kept++;}
   }
-  if(!keep[seedIdx]||kept<total*0.25||kept>total*0.94)return mask;
+  if(!keep[seedIdx]||kept<n*0.0015||kept>total*0.94)return mask;
   var out=new Uint8Array(n),st=[seedIdx],c=0;
   out[seedIdx]=1;
   while(st.length){
@@ -654,7 +671,7 @@ function tonePrune(mask,w,h,seedIdx){
     if(y>0&&keep[j-w]&&!out[j-w]){out[j-w]=1;st.push(j-w);}
     if(y<h-1&&keep[j+w]&&!out[j+w]){out[j+w]=1;st.push(j+w);}
   }
-  if(c<total*0.25)return mask;
+  if(c<n*0.0015)return mask;
   return morph(morph(out,w,h,1,5),w,h,0,5);
 }
 /* The ridge is visible in the picture — a straight brightness break running the length
@@ -707,6 +724,65 @@ function detectRidge(pts){
           b:{x:(bestR*ct-tmax*st2)/A.s,y:(bestR*st2+tmax*ct)/A.s},
           support:sup,span:span};
 }
+/* The tone constraint splits pavement off a roof, but it also splits the roof at its own
+   facet line — a sunlit and a shaded slope differ ~18 gray, pavement ~45. So on a small
+   house the subject shatters into fragments that each fall under minA. Re-join them:
+   start at the pin's fragment and absorb neighbouring fragments whose mean tone is close,
+   which merges facets back together without pulling in the drive. */
+function subjectFromPin(m,lab,w,h,n,A){
+  if(!S.pin)return null;
+  var px0=Math.round(S.pin.x*A.s),py0=Math.round(S.pin.y*A.s);
+  var rad=Math.max(8,Math.round(S.pin.h*A.s*1.5)),r,dx,dy,x,y,k,L0=0;
+  for(r=0;r<=rad&&!L0;r++)for(dy=-r;dy<=r&&!L0;dy++)for(dx=-r;dx<=r&&!L0;dx++){
+    if(Math.max(Math.abs(dx),Math.abs(dy))!==r)continue;
+    x=px0+dx;y=py0+dy;
+    if(x<0||y<0||x>=w||y>=h)continue;
+    k=y*w+x;
+    if(!lab[k])continue;
+    if(A.R[k]>120&&A.R[k]-A.G[k]>55&&A.R[k]-A.B[k]>55)continue;
+    L0=lab[k];
+  }
+  if(!L0)return null;
+  var maxL=0,i;
+  for(i=0;i<n;i++)if(lab[i]>maxL)maxL=lab[i];
+  var cntL=new Float64Array(maxL+1),sumL=new Float64Array(maxL+1);
+  function tone(j){return 0.299*A.R[j]+0.587*A.G[j]+0.114*A.B[j];}
+  for(i=0;i<n;i++){var L=lab[i];if(!L)continue;cntL[L]++;sumL[L]+=tone(i);}
+  var adj={},a,b,key;
+  function link(p,q){
+    if(!p||!q||p===q)return;
+    a=p<q?p:q;b=p<q?q:p;key=a+'_'+b;
+    if(!adj[key])adj[key]=1;
+  }
+  for(i=0;i<n;i++){
+    if(!lab[i])continue;
+    x=i%w;y=(i-x)/w;
+    if(x<w-1)link(lab[i],lab[i+1]);
+    if(y<h-1)link(lab[i],lab[i+w]);
+  }
+  var nb={};
+  for(key in adj){var pr=key.split('_'),p=+pr[0],q=+pr[1];
+    (nb[p]=nb[p]||[]).push(q);(nb[q]=nb[q]||[]).push(p);}
+  var inSet={},total=cntL[L0],toneSum=sumL[L0],queue=[L0];
+  inSet[L0]=1;
+  var maxA=n*0.22,guard=0;
+  while(queue.length&&guard++<4000){
+    var cur=queue.shift(),list=nb[cur]||[],z;
+    for(z=0;z<list.length;z++){
+      var L2=list[z];
+      if(inSet[L2])continue;
+      if(cntL[L2]<12)continue;
+      if(Math.abs(sumL[L2]/cntL[L2]-toneSum/total)>22)continue;   /* facet yes, pavement no */
+      if(total+cntL[L2]>maxA)continue;
+      inSet[L2]=1;total+=cntL[L2];toneSum+=sumL[L2];
+      queue.push(L2);
+    }
+  }
+  if(total<n*0.0015)return null;
+  var sub=new Uint8Array(n);
+  for(i=0;i<n;i++)if(lab[i]&&inSet[lab[i]])sub[i]=1;
+  return {mask:sub,count:total};
+}
 function detectBuildings(){
   var A=S.A;if(!A)return [];
   var w=A.w,h=A.h,n=w*h;
@@ -715,57 +791,125 @@ function detectBuildings(){
      it gets rejected below only when a blob is mostly pin. */
   var pinBox=S.pin?{x0:S.pin.x0*A.s,y0:S.pin.y0*A.s,
     x1:(S.pin.x0+S.pin.w)*A.s,y1:S.pin.y*A.s}:null;
-  var seedIdx=-1;
-  if(S.pin){
-    var sxA=Math.round(S.pin.x*A.s),syA=Math.round((S.pin.y+Math.max(2,S.pin.h*0.14))*A.s);
-    if(sxA>=0&&syA>=0&&sxA<w&&syA<h)seedIdx=syA*w+sxA;
+  var gr=new Float32Array(n),i;
+  for(i=0;i<n;i++)gr[i]=0.299*A.R[i]+0.587*A.G[i]+0.114*A.B[i];
+  var TL=16,TG=30;
+  /* The prune seed must be a point genuinely on the subject roof: inside the blob being
+     pruned, and clear of the marker graphic. A fixed offset below the tip cannot be both
+     — 3px is still red on a small pin, and stepping further misses a small roof. Search
+     outward from the tip for the nearest pixel that is in the blob and not red. */
+  var pinAx=S.pin?Math.round(S.pin.x*A.s):0,pinAy=S.pin?Math.round(S.pin.y*A.s):0;
+  var pinPt=S.pin?{x:pinAx,y:pinAy}:null;
+  var pinRad=S.pin?Math.max(8,Math.round(S.pin.h*A.s*1.5)):0;
+  function seedFor(sub){
+    if(!S.pin)return -1;
+    var r,dx,dy,x,y,k;
+    for(r=0;r<=pinRad;r++)for(dy=-r;dy<=r;dy++)for(dx=-r;dx<=r;dx++){
+      if(Math.max(Math.abs(dx),Math.abs(dy))!==r)continue;
+      x=pinAx+dx;y=pinAy+dy;
+      if(x<0||y<0||x>=w||y>=h)continue;
+      k=y*w+x;
+      if(!sub[k])continue;
+      if(A.R[k]>120&&A.R[k]-A.G[k]>55&&A.R[k]-A.B[k]>55)continue;
+      return k;
+    }
+    return -1;
   }
-  m=morph(m,w,h,0,3);m=morph(m,w,h,1,3);   /* open  — drop speckle */
-  m=morph(m,w,h,1,5);m=morph(m,w,h,0,5);   /* close — bridge ridge lines and vents */
-  var lab=new Int32Array(n),id=0,cands=[],minA=n*0.0015,maxA=n*0.22;
-  for(var i=0;i<n;i++){
+  var lab=new Int32Array(n),id=0,cands=[],minA=n*0.0015,maxA=n*0.22,capA=n*0.92;
+  for(i=0;i<n;i++){
     if(!m[i]||lab[i])continue;
     id++;
-    var st=[i],cnt=0,uiCnt=0,px=[],x0=w,x1=-1,y0=h,y1=-1;
+    var st=[i],cnt=0,uiCnt=0,px=[],x0=w,x1=-1,y0=h,y1=-1,seedT=gr[i];
     lab[i]=id;
     while(st.length){
       var j=st.pop();cnt++;
       if(px)px.push(j);
-      if(px&&px.length>maxA)px=null;
+      if(px&&px.length>capA)px=null;
       if(A.ui[j])uiCnt++;
-      var x=j%w,y=(j-x)/w;
+      var x=j%w,y=(j-x)/w,gj=gr[j];
       if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
-      if(x>0&&m[j-1]&&!lab[j-1]){lab[j-1]=id;st.push(j-1);}
-      if(x<w-1&&m[j+1]&&!lab[j+1]){lab[j+1]=id;st.push(j+1);}
-      if(y>0&&m[j-w]&&!lab[j-w]){lab[j-w]=id;st.push(j-w);}
-      if(y<h-1&&m[j+w]&&!lab[j+w]){lab[j+w]=id;st.push(j+w);}
+      function join(k){
+        return m[k]&&!lab[k]&&Math.abs(gr[k]-gj)<=TL&&Math.abs(gr[k]-seedT)<=TG;
+      }
+      if(x>0&&join(j-1)){lab[j-1]=id;st.push(j-1);}
+      if(x<w-1&&join(j+1)){lab[j+1]=id;st.push(j+1);}
+      if(y>0&&join(j-w)){lab[j-w]=id;st.push(j-w);}
+      if(y<h-1&&join(j+w)){lab[j+w]=id;st.push(j+w);}
     }
-    if(!px||cnt<minA||cnt>maxA)continue;
+    if(!px||cnt<minA)continue;
     if(uiCnt/cnt>0.35)continue;             /* that is a button, not a building */
     if(pinBox){                             /* that is the map pin, not a building */
       var ox=Math.min(x1,pinBox.x1)-Math.max(x0,pinBox.x0);
       var oy=Math.min(y1,pinBox.y1)-Math.max(y0,pinBox.y0);
       if(ox>0&&oy>0&&ox*oy>(x1-x0+1)*(y1-y0+1)*0.6)continue;
     }
+    /* Prune BEFORE judging shape. On a large property the roof, the drive and the deck
+       are one connected blob — 569,293px, 62% of the frame — so every shape test rejects
+       it before the cut that would isolate the roof ever happens. */
+    var sub=new Uint8Array(n),k;
+    for(k=0;k<px.length;k++)sub[px[k]]=1;
+    var seedIdx=seedFor(sub);
+    if(seedIdx>=0){
+      var pruned=tonePrune(sub,w,h,seedIdx);
+      if(pruned!==sub){
+        sub=pruned;cnt=0;x0=w;x1=-1;y0=h;y1=-1;
+        for(k=0;k<n;k++){
+          if(!sub[k])continue;
+          cnt++;
+          var kx=k%w,ky=(k-kx)/w;
+          if(kx<x0)x0=kx;if(kx>x1)x1=kx;if(ky<y0)y0=ky;if(ky>y1)y1=ky;
+        }
+      }
+    }
+    if(cnt<minA||cnt>maxA)continue;
     /* a road or field edge runs off the picture, and a clipped building measures short */
     var mg=Math.max(2,Math.round(Math.min(w,h)*0.006));
     if(x0<=mg||y0<=mg||x1>=w-1-mg||y1>=h-1-mg)continue;
     var bw=x1-x0+1,bh=y1-y0+1;
     if(bw<8||bh<8)continue;
+    /* The shape priors exist to reject driveways and shadow sprawl on blobs we know
+       nothing about. When the map pin sits inside the blob we have external evidence
+       that it IS the subject building, so hold it to a looser standard — a mansion
+       with wings is nowhere near rectangular and was being rejected at rectFit. */
+    var hasPin=pinPt&&pinPt.x>=x0-2&&pinPt.x<=x1+2&&pinPt.y>=y0-2&&pinPt.y<=y1+2;
     var fill=cnt/(bw*bh);
-    if(fill<0.38)continue;                  /* drives and tree shadow sprawl */
+    if(fill<(hasPin?0.22:0.38))continue;    /* drives and tree shadow sprawl */
     if(bw/bh>5||bh/bw>5)continue;           /* long thin things are pavement */
-    var sub=new Uint8Array(n);
-    for(var k=0;k<px.length;k++)sub[px[k]]=1;
-    if(seedIdx>=0&&sub[seedIdx])sub=tonePrune(sub,w,h,seedIdx);
     var poly=maskToPoly(sub,w,h);
     if(!poly)continue;
     if(poly.length>26)continue;             /* buildings tidy up; sprawl does not */
     var pa=areaPx(poly);
     if(pa<cnt*0.6||pa>cnt*1.7)continue;     /* the tidy-up wandered off the blob */
-    if(rectFit(poly,pa)<0.62)continue;      /* drives, shadow and field edges sprawl */
+    if(rectFit(poly,pa)<(hasPin?0.34:0.62))continue;  /* drives, shadow and field edges sprawl */
     cands.push({pts:poly,px:cnt,areaA:pa,
       areaImg:pa/(A.s*A.s),cx:(x0+x1)/2,cy:(y0+y1)/2});
+  }
+  /* If nothing found so far sits under the pin, rebuild the subject by re-joining the
+     tone fragments around it and run that through the same shape tests. */
+  var pinHit=false,pq;
+  for(pq=0;pq<cands.length;pq++){
+    var cb=cands[pq].pts,mnx2=1e9,mxx2=-1e9,mny2=1e9,mxy2=-1e9;
+    cb.forEach(function(q2){if(q2.x<mnx2)mnx2=q2.x;if(q2.x>mxx2)mxx2=q2.x;
+      if(q2.y<mny2)mny2=q2.y;if(q2.y>mxy2)mxy2=q2.y;});
+    if(pinPt&&pinPt.x>=mnx2-4&&pinPt.x<=mxx2+4&&pinPt.y>=mny2-4&&pinPt.y<=mxy2+4)pinHit=true;
+  }
+  if(!pinHit){
+    var mg2=Math.max(2,Math.round(Math.min(w,h)*0.006));
+    var sj=subjectFromPin(m,lab,w,h,n,A);
+    if(sj){
+      var p2=maskToPoly(sj.mask,w,h);
+      if(p2&&p2.length<=26){
+        var a2=areaPx(p2),xs2=p2.map(function(q3){return q3.x;}),ys2=p2.map(function(q3){return q3.y;});
+        var bx0=Math.min.apply(null,xs2),bx1=Math.max.apply(null,xs2);
+        var by0=Math.min.apply(null,ys2),by1=Math.max.apply(null,ys2);
+        if(a2>=n*0.0015&&a2<=n*0.22&&
+           bx0>mg2&&by0>mg2&&bx1<w-1-mg2&&by1<h-1-mg2&&
+           a2>=sj.count*0.6&&a2<=sj.count*1.7&&rectFit(p2,a2)>=0.34){
+          cands.push({pts:p2,px:sj.count,areaA:a2,areaImg:a2/(A.s*A.s),
+            cx:(bx0+bx1)/2,cy:(by0+by1)/2});
+        }
+      }
+    }
   }
   /* the building under the pin is the job. everything else is a neighbour. */
   var pin=S.pin?{x:S.pin.x*A.s,y:S.pin.y*A.s}:null;
@@ -1321,29 +1465,53 @@ function wandPolyAt(pt){
    we know exactly where the roof is: under the pin. Flood from there instead. */
 function roofUnderPin(){
   if(!S.pin||!S.A)return null;
-  var t=S.pin,step=Math.max(2,Math.round(t.h*0.12));
+  var t=S.pin,A=S.A;
   var frame=S.img.width*S.img.height;
-  var seeds=[[0,step],[0,step*2],[-step,step],[step,step],[0,step*3]];
-  var tols=[10,14,20,28,38],keep=null,save=S.tol,i,k;
+  /* Seeds must clear the pin GRAPHIC. Three px below the tip is still red marker on
+     a 22px pin, and flooding from the marker itself walls the fill into the pin and
+     returns a ~370px blob. Step out properly and skip anything red-dominant. */
+  var step=Math.max(4,Math.round(t.h*0.30)),seeds=[],i,k;
+  for(i=1;i<=4;i++)seeds.push([0,step*i],[-step,step*i],[step,step*i]);
+  function onPin(p){
+    var x=Math.round(p.x*A.s),y=Math.round(p.y*A.s);
+    if(x<0||y<0||x>=A.w||y>=A.h)return true;
+    var j=y*A.w+x,r=A.R[j],g=A.G[j],b=A.B[j];
+    return r>120&&r-g>55&&r-b>55;
+  }
+  var tols=[8,10,14,20,28,38,52],best=null,bestA=0,save=S.tol;
   for(i=0;i<seeds.length;i++){
     var p={x:t.x+seeds[i][0],y:t.y+seeds[i][1]};
     if(p.x<1||p.y<1||p.x>=S.img.width-1||p.y>=S.img.height-1)continue;
+    if(onPin(p))continue;
     for(k=0;k<tols.length;k++){
       S.tol=tols[k];
       var poly=wandPolyAt(p);
       if(!poly)continue;
       var a=areaPx(poly);
-      /* on leaf-off imagery the roof and the dead lawn are nearly the same colour,
-         so a loose flood swallows the whole yard. Take the tightest fill that still
-         looks like a building and stop. */
-      if(a<300||a>frame*0.06)continue;
-      if(rectFit(poly,a)<0.55)continue;
-      keep=poly;break;
+      if(a<Math.max(400,frame*0.002)||a>frame*0.06)continue;
+      var xs=poly.map(function(q){return q.x;}),ys=poly.map(function(q){return q.y;});
+      var bw=Math.max.apply(null,xs)-Math.min.apply(null,xs);
+      var bh=Math.max.apply(null,ys)-Math.min.apply(null,ys);
+      if(bw<=0||bh<=0)continue;
+      if(Math.max(bw/bh,bh/bw)>4)continue;      /* a long sliver is one facet, not a roof */
+      /* same rule detectBuildings uses: a fill that reaches the frame edge has escaped
+         into the yard or the road, and a clipped building measures short anyway */
+      var mg=Math.max(2,Math.round(Math.min(S.img.width,S.img.height)*0.006));
+      if(Math.min.apply(null,xs)<=mg||Math.min.apply(null,ys)<=mg||
+         Math.max.apply(null,xs)>=S.img.width-1-mg||Math.max.apply(null,ys)>=S.img.height-1-mg)continue;
+      var rf=rectFit(poly,a);
+      if(rf<0.55)continue;
+      /* Walk tolerance upward and keep the last fill that still qualifies, but stop
+         the moment one balloons past the previous — a flood that suddenly triples has
+         broken through the eave into the yard. On the leaf-off shot the series runs
+         5288, 7242, then 23083 px, and the roof is the 7242. */
+      if(bestA>0&&a>bestA*2.2)break;
+      best=poly;bestA=a;
     }
-    if(keep)break;
+    if(best)break;
   }
   S.tol=save;
-  return keep;
+  return best;
 }
 function runWand(seed){
   if(!S.A){toast('Image not analysed',1);return;}
