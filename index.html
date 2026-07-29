@@ -221,6 +221,11 @@ details.sec[open]>summary{margin-bottom:10px}
         <button class="btn alt" id="wandBtn">Find the roof</button>
         <button class="btn ghost" id="squareBtn" style="flex:0 0 84px">Square up</button>
       </div>
+      <div class="row" style="margin-bottom:9px">
+        <button class="btn ghost" id="addPlaneBtn">+ Add a plane</button>
+        <button class="btn ghost" id="editPlaneBtn">Edit points</button>
+      </div>
+      <p class="note" id="editHint" style="margin:-4px 0 9px"></p>
       <div class="list" id="planeList"></div>
       <div class="row" style="margin-top:9px">
         <div class="field" style="margin:0;flex:0 0 96px"><label>Type</label>
@@ -296,7 +301,7 @@ var FLAT={ridge:1,eave:1};
 var S={img:null,imgSrc:null,A:null,z:1,px:0,py:0,mode:'trace',ftPerPx:null,calibFeet:null,
   calib:null,draft:[],planes:[],runs:[],sel:null,pitch:6,waste:10,bps:3,seq:0,
   magnet:true,autoSquare:true,autoWaste:true,tol:30,scaleBar:null,cands:[],
-  scaleConfirmed:false,pitchSource:'assumed',pitchMeasured:null,pin:null};
+  scaleConfirmed:false,pitchSource:'assumed',pitchMeasured:null,pin:null,runsTouched:false};
 var cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 var mouseImg=null,drag=null,space=false,shift=false;
 var $=function(i){return document.getElementById(i);};
@@ -1009,6 +1014,49 @@ function autoFindRoof(quiet){
   return keep.length;
 }
 
+/* ══ editing planes ══
+   Trace mode already builds a plane and vertices already drag. What was missing is
+   changing a shape after the fact: adding a point on an edge, removing one, and moving
+   a whole plane. Handles for that only show on the selected plane so they cannot be
+   hit by accident while tracing. */
+function editable(){
+  if(!S.sel||S.sel.t!=='p')return null;
+  for(var i=0;i<S.planes.length;i++)if(S.planes[i].id===S.sel.id)return S.planes[i];
+  return null;
+}
+/* midpoint of each edge of the selected plane, for inserting a point */
+function hitMid(sp){
+  var f=editable();if(!f)return null;
+  var best=null,bd=11,i,a,b,m;
+  for(i=0;i<f.pts.length;i++){
+    a=toS(f.pts[i]);b=toS(f.pts[(i+1)%f.pts.length]);
+    m={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+    var d=Math.hypot(m.x-sp.x,m.y-sp.y);
+    if(d<bd){bd=d;best={f:f,i:i};}
+  }
+  return best;
+}
+function insertPoint(hit){
+  var f=hit.f,i=hit.i,a=f.pts[i],b=f.pts[(i+1)%f.pts.length];
+  f.pts.splice(i+1,0,{x:(a.x+b.x)/2,y:(a.y+b.y)/2});
+  afterShapeEdit();
+  return {pts:f.pts,i:i+1,own:{t:'p',id:f.id}};
+}
+function deletePointAt(sp){
+  var hv=hitVertex(sp);
+  if(!hv||!hv.pts)return false;
+  if(hv.pts.length<=3){toast('A plane needs at least three points',1);return true;}
+  hv.pts.splice(hv.i,1);
+  afterShapeEdit();
+  return true;
+}
+/* A geometry change makes derived runs stale. Re-derive them, unless the runs have been
+   hand-edited — in that case say so rather than quietly throwing his work away. */
+function afterShapeEdit(){
+  if(S.runs.length&&!S.runsTouched){S.runs=[];deriveRuns(true);}
+  renderPlanes();renderRuns();renderAll();draw();
+}
+
 /* ══ measures ══ */
 function fPlan(f){return S.ftPerPx?areaPx(f.pts)*S.ftPerPx*S.ftPerPx:0;}
 function fArea(f){return fPlan(f)*slope(f.pitch);}
@@ -1095,6 +1143,20 @@ function draw(){
     ctx.fillStyle=rgba(f.color,sel?.30:.17);ctx.fill();
     ctx.lineWidth=sel?2.6:1.8;ctx.strokeStyle=f.color;ctx.stroke();
     sp.forEach(function(p){dot(p,f.color,sel);});
+    if(sel&&!S.draft.length){
+      /* small squares at edge midpoints — click one to add a point there */
+      sp.forEach(function(p,i){
+        var q=sp[(i+1)%sp.length],mx=(p.x+q.x)/2,my=(p.y+q.y)/2;
+        if(Math.hypot(q.x-p.x,q.y-p.y)<26)return;
+        ctx.beginPath();ctx.rect(mx-3.5,my-3.5,7,7);
+        ctx.fillStyle='#0f1315';ctx.fill();
+        ctx.lineWidth=1.6;ctx.strokeStyle=f.color;ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(mx-2,my);ctx.lineTo(mx+2,my);
+        ctx.moveTo(mx,my-2);ctx.lineTo(mx,my+2);
+        ctx.lineWidth=1.2;ctx.strokeStyle=f.color;ctx.stroke();
+      });
+    }
     if(S.ftPerPx){var c=toS(centroid(f.pts));tag(c.x,c.y,f.name,fmt(fArea(f))+' sf',f.color);}
   });
   S.runs.forEach(function(rn){
@@ -1327,7 +1389,7 @@ function renderAll(){
     r.eave?L('Eave',fmt(r.eave,1)+' ft'):'',
     r.rake?L('Rake',fmt(r.rake,1)+' ft'):''
   ].join(''):'<div class="empty-t">Set the scale, then trace the roof.</div>';
-  syncPitch();refreshScaleTarget();calibReadout();checks();guide();
+  syncPitch();refreshScaleTarget();editHint();calibReadout();checks();guide();
 }
 function L(k,v){return '<div class="l"><i>'+k+'</i><b>'+v+'</b></div>';}
 function checks(){
@@ -1428,7 +1490,7 @@ function closePlane(){
 function delSel(){
   if(!S.sel)return;
   if(S.sel.t==='p')S.planes=S.planes.filter(function(f){return f.id!==S.sel.id;});
-  else S.runs=S.runs.filter(function(r){return r.id!==S.sel.id;});
+  else {S.runs=S.runs.filter(function(r){return r.id!==S.sel.id;});S.runsTouched=true;}
   S.sel=null;renderPlanes();renderRuns();draw();
 }
 
@@ -1626,12 +1688,22 @@ cv.addEventListener('pointerdown',function(e){
   if(e.button!==0)return;
   if(S.mode==='wand'){runWand(ip);return;}
   if(!S.draft.length){
+    /* a "+" on an edge of the selected plane inserts a point and starts dragging it */
+    var hm=hitMid({x:sx,y:sy});
+    if(hm){drag={t:'v',h:insertPoint(hm)};draw();return;}
     var hv=hitVertex({x:sx,y:sy});
-    if(hv){drag={t:'v',h:hv};if(hv.own)S.sel=hv.own;renderPlanes();renderRuns();draw();return;}
+    if(hv){
+      if(e.altKey&&hv.pts){deletePointAt({x:sx,y:sy});return;}
+      drag={t:'v',h:hv};if(hv.own)S.sel=hv.own;renderPlanes();renderRuns();draw();return;}
   }
   if(S.mode==='edit'){
     var f=null;
     for(var i=S.planes.length-1;i>=0;i--)if(inPoly(ip,S.planes[i].pts)){f={t:'p',id:S.planes[i].id};break;}
+    /* clicking inside the plane that is already selected picks the whole thing up */
+    if(f&&S.sel&&S.sel.t==='p'&&S.sel.id===f.id){
+      var fo=editable();
+      if(fo){drag={t:'body',f:fo,start:ip,orig:fo.pts.map(function(q){return{x:q.x,y:q.y};})};draw();return;}
+    }
     S.sel=f;renderPlanes();renderRuns();draw();return;
   }
   var p=place(ip);
@@ -1643,7 +1715,7 @@ cv.addEventListener('pointerdown',function(e){
   }
   if(S.mode==='run'){
     S.draft.push(p);
-    if(S.draft.length===2){addRun(S.draft[0],S.draft[1],'ridge');S.draft=[];}
+    if(S.draft.length===2){addRun(S.draft[0],S.draft[1],'ridge');S.draft=[];S.runsTouched=true;}
     draw();return;
   }
   if(S.mode==='trace'){
@@ -1659,6 +1731,11 @@ cv.addEventListener('pointermove',function(e){
   mouseImg=toI(sx,sy);
   if(drag){
     if(drag.t==='pan'){S.px=drag.px+(sx-drag.sx);S.py=drag.py+(sy-drag.sy);}
+    else if(drag.t==='body'){
+      var dxi=mouseImg.x-drag.start.x,dyi=mouseImg.y-drag.start.y;
+      drag.f.pts.forEach(function(q,qi){q.x=drag.orig[qi].x+dxi;q.y=drag.orig[qi].y+dyi;});
+      renderAll();
+    }
     else if(drag.t==='v'){
       var h=drag.h,np=S.magnet?snapPoint(mouseImg):mouseImg;
       if(h.o)h.o[h.k]=np;else h.pts[h.i]=np;
@@ -1669,8 +1746,13 @@ cv.addEventListener('pointermove',function(e){
   draw();
 });
 window.addEventListener('pointerup',function(){
-  if(drag&&drag.t==='v'){renderPlanes();renderRuns();}drag=null;});
-cv.addEventListener('contextmenu',function(e){e.preventDefault();});
+  if(drag&&(drag.t==='v'||drag.t==='body'))afterShapeEdit();
+  drag=null;});
+cv.addEventListener('contextmenu',function(e){
+  e.preventDefault();
+  var r=cv.getBoundingClientRect();
+  deletePointAt({x:e.clientX-r.left,y:e.clientY-r.top});
+});
 cv.addEventListener('dblclick',function(){if(S.mode==='trace'&&S.draft.length>2)closePlane();});
 cv.addEventListener('wheel',function(e){
   if(!S.img)return;e.preventDefault();
@@ -1836,6 +1918,16 @@ function refreshScaleTarget(){
   var sig=Math.round(scaleTarget());
   if(sig!==sbSig){sbSig=sig;renderScaleBar();}
 }
+function editHint(){
+  var el=$('editHint');if(!el)return;
+  if(S.mode==='trace'&&S.draft.length)
+    el.innerHTML='Placing points — click the first one again or press <b>Enter</b> to close, <b>Backspace</b> to undo the last.';
+  else if(S.mode==='edit'&&S.sel&&S.sel.t==='p')
+    el.innerHTML='Drag a corner to move it. Click a <b>+</b> on an edge to add one. Right-click a corner to remove it. Drag inside to move the whole plane. <b>Del</b> removes it.';
+  else if(S.mode==='edit')
+    el.innerHTML='Click a plane to select it.';
+  else el.innerHTML='';
+}
 function renderScaleBar(){
   var box=$('sbBox'),pick=$('sbPick'),btn=$('sbApply');
   if(!S.img){box.innerHTML='<div class="empty-t">Paste a screenshot of the <b>whole</b> Google Maps window — Ctrl+V. The scale bar in its corner is how the app gets its scale.</div>';
@@ -1960,6 +2052,7 @@ $('runList').addEventListener('click',function(e){
   var host=e.target.closest('.item');if(!host)return;
   if(e.target.dataset.a==='del'){
     S.runs=S.runs.filter(function(x){return x.id!=host.dataset.id;});
+    S.runsTouched=true;
     S.sel=null;renderRuns();renderAll();draw();}
 });
 $('pitch').addEventListener('change',function(e){
@@ -1971,6 +2064,17 @@ $('deriveBtn').addEventListener('click',function(){deriveRuns(false);});
 $('wandBtn').addEventListener('click',function(){
   S.cands=detectBuildings();
   if(!autoFindRoof(false)){setMode('wand');toast('Nothing found — click on the roof yourself',1);}
+});
+$('addPlaneBtn').addEventListener('click',function(){
+  S.draft=[];setMode('trace');
+  toast('Click each corner of the roof. Click the first point again, or press Enter, to close it.');
+});
+$('editPlaneBtn').addEventListener('click',function(){
+  setMode('edit');
+  if(!S.planes.length){toast('Nothing traced yet',1);return;}
+  if(!S.sel||S.sel.t!=='p')S.sel={t:'p',id:S.planes[S.planes.length-1].id};
+  renderPlanes();renderRuns();draw();
+  toast('Drag a corner to move it, a + on an edge to add one, right-click a corner to remove it');
 });
 $('squareBtn').addEventListener('click',function(){
   var f=S.sel&&S.sel.t==='p'?S.planes.filter(function(x){return x.id===S.sel.id;})[0]:S.planes[S.planes.length-1];
@@ -2048,7 +2152,7 @@ $('resetAll').addEventListener('click',function(){
 });
 function reset(){
   S.planes=[];S.runs=[];S.calib=null;S.ftPerPx=null;S.calibFeet=null;S.draft=[];S.sel=null;
-  S.scaleBar=null;S.cands=[];S.pin=null;S.scaleConfirmed=false;sbSig=-1;S.pitchSource='assumed';S.pitchMeasured=null;renderScaleBar();renderPlanes();renderRuns();renderAll();
+  S.scaleBar=null;S.cands=[];S.pin=null;S.scaleConfirmed=false;S.runsTouched=false;sbSig=-1;S.pitchSource='assumed';S.pitchMeasured=null;renderScaleBar();renderPlanes();renderRuns();renderAll();
 }
 
 /* ══ image ══ */
