@@ -309,9 +309,11 @@
     #stage{
       border: 2pt solid #000;
       filter: grayscale(1) contrast(1.25);
+      /* fill the frame edge to edge -- he'd rather use the space than keep the
+         screenshot's exact proportions; the numbers carry the measurements */
       width: 100%;
-      max-height: var(--aerialH);
-      object-fit: contain;
+      height: var(--aerialH);
+      object-fit: fill;
     }
     .canvas-wrap{ text-align: center; }
 
