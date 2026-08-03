@@ -9,7 +9,6 @@
 
   :root{
     --aerialH: 3.8in;
-    --refH: 1.25in;
     --bg: #17191c;
     --panel: #1f2226;
     --line: #33373d;
@@ -35,14 +34,18 @@
   }
   .wrap{ max-width: 640px; margin: 0 auto; }
   .colR{ display: contents; }
-  header{ margin-bottom: 28px; border-bottom: 2px solid var(--line); padding-bottom: 16px; }
+  header{
+    margin-bottom: 26px; padding-bottom: 14px; position: relative;
+    border-bottom: 2px solid var(--line);
+  }
   h1{
     font-family: 'Oswald', sans-serif;
     font-weight: 700;
-    font-size: 1.5rem;
+    font-size: 1.6rem;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     margin: 0 0 4px;
+    color: var(--ink);
   }
   .sub{ color: var(--ink-dim); font-size: 0.8rem; }
 
@@ -81,6 +84,7 @@
   .btn:hover{ border-color: var(--steel); color: var(--ink); }
   .btn:active{ background: rgba(91,139,176,0.12); }
   .btn.on{ border-color: var(--steel); color: var(--ink); background: rgba(91,139,176,0.14); }
+  .btn.ready{ border-color: var(--ink-dim); color: var(--ink); }
   .btn:disabled{ opacity: 0.35; cursor: default; }
 
   .upload-area{
@@ -96,7 +100,11 @@
   #imgInput{ display: none; }
 
   .canvas-wrap{ position: relative; width: 100%; line-height: 0; }
-  #stage{ width: 100%; display: block; cursor: crosshair; touch-action: none; }
+  #stage{
+    display: block; margin: 0 auto; cursor: crosshair; touch-action: none;
+    width: auto; height: auto; max-width: 100%;
+    max-height: calc(var(--aerialH) * 1.9);
+  }
 
   .steps{ display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
   .hint{
@@ -137,6 +145,9 @@
   .rbtn .v{ font-size: 0.85rem; font-weight: 700; display: block; }
   .rbtn .imp{ font-size: 0.62rem; color: var(--ink-dim); display: block; }
 
+  .notes-for{
+    font-size: 0.66rem; color: var(--ink-dim); letter-spacing: 0.04em;
+  }
   .notes-box{
     width: 100%;
     height: 110px;
@@ -220,10 +231,7 @@
   }
 
   .refbox{ margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 12px; }
-  .refbox img{
-    width: 100%; display: block; border: 1px solid var(--line);
-    max-height: calc(var(--refH) * 2.2); object-fit: contain;
-  }
+  .refbox img{ width: 100%; display: block; border: 1px solid var(--line); }
   .refcap{
     font-size: 0.7rem; color: var(--ink-dim); margin-top: 6px;
     text-transform: uppercase; letter-spacing: 0.05em;
@@ -248,7 +256,7 @@
     #stage{
       width: auto; height: auto;
       max-width: 100%;
-      max-height: calc(100vh - 330px);
+      max-height: min(calc(var(--aerialH) * 1.9), calc(100vh - 150px));
       margin: 0 auto;
     }
     .p-inputs .grid2{ grid-template-columns: 1fr 1fr; }
@@ -261,6 +269,7 @@
     body{
       background: #fff; background-image: none; color: #000;
       padding: 0; font-size: 9.5pt;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
     .wrap{
       max-width: 100%;
@@ -271,23 +280,34 @@
     html, body{ height: auto; overflow: hidden; }
 
     /* header: one tight line */
-    header{ border-bottom: 2px solid #000; margin-bottom: 6px; padding-bottom: 4px; }
-    h1{ color: #000; font-size: 1.05rem; margin: 0; }
+    header{ border-bottom: 3.5pt solid #000; margin-bottom: 8px; padding-bottom: 3px; }
+    h1{
+      color: #000; font-size: 1.45rem; margin: 0;
+      letter-spacing: 0.08em; font-weight: 700;
+      background: none; -webkit-text-fill-color: #000;
+    }
+    header::after{ display: none; }
+    .panel .panel-label{ color: #000 !important; }
+    .runs .r b{ color: #000 !important; }
     .sub{ display: none; }
 
     .panel{
-      background: #fff; border: none; border-top: 1px solid #000;
+      background: #fff !important; border: none; border-top: 1px solid #000;
+      border-left: none;
       padding: 6px 0 0; margin: 0 0 7px;
       break-inside: avoid;
     }
     .p-aerial{ border-top: none; padding-top: 0; }
     .panel-label{
-      color: #000; margin: 0 0 4px; font-size: 0.62rem; letter-spacing: 0.14em;
+      color: #000; margin: 0 0 5px; font-size: 0.7rem;
+      letter-spacing: 0.2em; font-weight: 700;
     }
+    .panel{ border-top-width: 1.5pt; }
+    .p-aerial{ border-top: none; }
 
     /* the roof is the point of the sheet -- give it the page */
     #stage{
-      border: 1px solid #000;
+      border: 2pt solid #000;
       filter: grayscale(1) contrast(1.25);
       width: 100%;
       max-height: var(--aerialH);
@@ -303,9 +323,10 @@
     .field{ margin: 0 0 5px; }
     label{ color: #000 !important; font-size: 0.6rem; margin-bottom: 2px; }
     input{
-      background: #fff; color: #000; border: none; border-bottom: 1px solid #000;
-      padding: 1px 0; font-size: 11pt; font-weight: 700;
+      background: #fff; color: #000; border: none; border-bottom: 1.5pt solid #000;
+      padding: 1px 0; font-size: 12.5pt; font-weight: 700;
     }
+    label{ letter-spacing: 0.12em; font-weight: 700; }
 
     /* plan: numbers left, run list and photo right */
     .p-plan{
@@ -321,30 +342,49 @@
     .facts { grid-column: 1; grid-row: 3; }
     #kickFlag{ grid-column: 1 / -1; grid-row: 4; margin-top: 6px; }
     #fitFlag, #toeFlag{ display: none; }
-    .result-row{ border-bottom: 1px solid #999; padding: 3px 0; }
-    .result-label{ color: #000 !important; font-size: 0.66rem; white-space: nowrap; }
-    .result-value{ color: #000; font-size: 0.95rem; white-space: nowrap; }
+    .result-row{ border-bottom: 0.5pt solid #000; padding: 4px 0; align-items: center; }
+    .result-label{
+      color: #000 !important; font-size: 0.6rem; white-space: nowrap;
+      letter-spacing: 0.1em; text-transform: uppercase;
+    }
+    .result-value{ color: #000; font-size: 1.15rem; white-space: nowrap; font-weight: 700; }
+    /* the one number the driver reads first */
+    .facts .result-row:first-child{ border-bottom: 1.5pt solid #000; padding-bottom: 5px; }
+    .facts .result-row:first-child .result-value{ font-size: 2rem; line-height: 1; }
 
-    .runs .rhead{ color: #000 !important; font-size: 0.58rem; border-bottom: 1px solid #000; padding-bottom: 2px; }
-    .runs .r{ color: #000 !important; padding: 1.5px 0; font-size: 0.7rem; }
-    .runs .r.tot{ border-top: 1px solid #000; }
+    .runs .rhead{
+      color: #000 !important; font-size: 0.58rem; letter-spacing: 0.14em;
+      border-bottom: 1.5pt solid #000; padding-bottom: 2px; font-weight: 700;
+    }
+    .runs .r{ color: #000 !important; padding: 2px 0; font-size: 0.74rem; border-bottom: 0.4pt solid #999; }
+    .runs .r.tot{
+      border-top: 1.5pt solid #000; border-bottom: none;
+      font-weight: 700; font-size: 0.8rem; padding-top: 3px;
+    }
 
-    .refbox img{ border: 1px solid #000; width: 100%; max-height: var(--refH); object-fit: contain; }
-    .refcap{ color: #000 !important; font-size: 0.58rem; margin-top: 3px; }
+    .refbox img{ border: 1.5pt solid #000; width: 100%; max-height: 1.25in; object-fit: contain; }
+    .notes-for{ color: #000 !important; font-size: 0.6rem; letter-spacing: 0.1em; }
+    .refcap{
+      color: #000 !important; font-size: 0.58rem; margin-top: 3px;
+      letter-spacing: 0.1em; font-weight: 700;
+    }
 
     .flag{
       background: #fff !important; color: #000 !important;
-      border-left: 3px solid #000; margin: 0; padding: 4px 7px; font-size: 0.72rem;
+      border-left: 3pt solid #000; margin: 0; padding: 5px 8px; font-size: 0.74rem;
     }
-    .flag.warn{ border-left: 4px double #000; font-weight: 700; }
+    .flag.warn{
+      border: 1.5pt solid #000; border-left: 6pt solid #000;
+      font-weight: 700; letter-spacing: 0.01em;
+    }
     .flag.warn::before{ content: "\26A0  "; }
 
     .notes-box{
-      height: 0.75in; background: #fff; border: 1px solid #000;
+      height: 1.5in; background: #fff; border: 1.5pt solid #000;
       background-image: repeating-linear-gradient(
         to bottom,
-        transparent, transparent calc(1.8em - 1px),
-        #bbb calc(1.8em - 1px), #bbb 1.8em
+        transparent, transparent calc(2.6em - 1px),
+        #999 calc(2.6em - 1px), #999 2.6em
       );
     }
 
@@ -363,7 +403,7 @@
     <div class="panel-header">
       <p class="panel-label">Aerial</p>
       <div style="display:flex; gap:12px; align-items:center;">
-        <label class="szctl" title="How tall the aerial prints">Print
+        <label class="szctl" title="How big the aerial is, on screen and on the sheet">Size
           <input type="range" id="aerialSize" min="2" max="5.5" step="0.1" value="3.8">
           <span id="aerialSizeVal">3.8"</span>
         </label>
@@ -454,10 +494,6 @@
     <div class="refbox">
       <img id="refImg" alt="Stack type reference photo">
       <div class="refcap" id="refCap">&mdash;</div>
-      <label class="szctl" style="margin-top:6px;" title="How tall the example photo prints">Print
-        <input type="range" id="refSize" min="0.8" max="2.5" step="0.05" value="1.25">
-        <span id="refSizeVal">1.25"</span>
-      </label>
     </div>
 
     <div id="fitFlag"></div>
@@ -467,7 +503,10 @@
   </div>
 
   <div class="panel p-notes">
-    <p class="panel-label">Driver Notes</p>
+    <div class="panel-header">
+      <p class="panel-label">Driver Notes</p>
+      <span class="notes-for">Blank on purpose &mdash; the driver writes here on site</span>
+    </div>
     <div class="notes-box"></div>
   </div>
 
@@ -846,6 +885,9 @@ function setMode(m){
 }
 
 function updateHint(){
+  const done = document.getElementById('doneRidgeBtn');
+  if (done) done.classList.toggle('ready', !!(S.ridges.length && !S.ridgeDone));
+
   if (S.mode === 'scale'){
     hintEl.innerHTML = S.bar
       ? `Scale bar found: <b>${S.bar.len} px</b>. Check the crop below and tap what it reads. Wrong bar? Drag along the right one on the image.`
@@ -1181,7 +1223,6 @@ function bindSize(id, outId, cssVar){
   apply();
 }
 bindSize('aerialSize', 'aerialSizeVal', '--aerialH');
-bindSize('refSize',    'refSizeVal',    '--refH');
 
 calc();
 </script>
