@@ -8,6 +8,8 @@
   @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
   :root{
+    --aerialH: 3.8in;
+    --refH: 1.25in;
     --bg: #17191c;
     --panel: #1f2226;
     --line: #33373d;
@@ -202,8 +204,26 @@
   .runs .r b{ color: var(--ink); font-weight: 700; }
   .runs .r.tot{ border-top: 1px solid var(--line); margin-top: 4px; padding-top: 5px; color: var(--ink); }
 
+  .szctl{
+    display: flex; align-items: center; gap: 7px;
+    font-size: 0.62rem; color: var(--ink-dim);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .szctl input[type="range"]{
+    width: 92px; padding: 0; border: none; background: transparent;
+    accent-color: var(--steel); cursor: pointer;
+  }
+  .szctl span{ color: var(--ink); min-width: 34px; text-align: right; }
+
+  .plan-note{
+    margin: -6px 0 10px; font-size: 0.7rem; color: var(--ink-dim); line-height: 1.4;
+  }
+
   .refbox{ margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 12px; }
-  .refbox img{ width: 100%; display: block; border: 1px solid var(--line); }
+  .refbox img{
+    width: 100%; display: block; border: 1px solid var(--line);
+    max-height: calc(var(--refH) * 2.2); object-fit: contain;
+  }
   .refcap{
     font-size: 0.7rem; color: var(--ink-dim); margin-top: 6px;
     text-transform: uppercase; letter-spacing: 0.05em;
@@ -242,7 +262,13 @@
       background: #fff; background-image: none; color: #000;
       padding: 0; font-size: 9.5pt;
     }
-    .wrap{ max-width: 100%; display: block; }
+    .wrap{
+      max-width: 100%;
+      display: block;
+      max-height: 10.05in;   /* letter minus margins -- nothing can push a second page */
+      overflow: hidden;
+    }
+    html, body{ height: auto; overflow: hidden; }
 
     /* header: one tight line */
     header{ border-bottom: 2px solid #000; margin-bottom: 6px; padding-bottom: 4px; }
@@ -264,16 +290,17 @@
       border: 1px solid #000;
       filter: grayscale(1) contrast(1.25);
       width: 100%;
-      max-height: 4.3in;
+      max-height: var(--aerialH);
       object-fit: contain;
     }
     .canvas-wrap{ text-align: center; }
 
-    /* job inputs as one strip */
-    .p-inputs{ display: flex; align-items: flex-end; gap: 14px; }
-    .p-inputs .panel-header{ margin: 0; }
-    .p-inputs .grid2{ display: contents; }
-    .field{ margin: 0; flex: 1; }
+    /* bottom band: inputs | numbers | run list | photo, all side by side */
+    .colR{ display: flex; align-items: flex-start; gap: 14px; }
+    .p-inputs{ flex: 0 0 1.55in; }
+    .p-inputs .panel-header{ margin: 0 0 4px; }
+    .p-inputs .grid2{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .field{ margin: 0 0 5px; }
     label{ color: #000 !important; font-size: 0.6rem; margin-bottom: 2px; }
     input{
       background: #fff; color: #000; border: none; border-bottom: 1px solid #000;
@@ -282,17 +309,18 @@
 
     /* plan: numbers left, run list and photo right */
     .p-plan{
+      flex: 1;
       display: grid;
-      grid-template-columns: 1.05fr 1fr;
-      column-gap: 16px;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) 1.4in;
+      column-gap: 14px;
     }
-    .p-plan > .panel-label{ grid-column: 1 / -1; }
-    .facts{ grid-column: 1; }
-    .runs { grid-column: 2; grid-row: 2; margin: 0; border-top: none; padding-top: 0; }
-    .refbox{ grid-column: 2; grid-row: 3; border-top: none; margin-top: 6px; padding-top: 0; }
-    #kickFlag{ grid-column: 1; grid-row: 3; align-self: start; }
+    .p-plan > .panel-label{ grid-column: 1 / -1; grid-row: 1; }
+    .plan-note{ grid-column: 1 / -1; grid-row: 2; color: #000 !important; font-size: 0.62rem; margin: -2px 0 5px; }
+    .runs { grid-column: 2; grid-row: 3; margin: 0; border-top: none; padding-top: 0; }
+    .refbox{ grid-column: 3; grid-row: 3; border-top: none; margin: 0; padding-top: 0; }
+    .facts { grid-column: 1; grid-row: 3; }
+    #kickFlag{ grid-column: 1 / -1; grid-row: 4; margin-top: 6px; }
     #fitFlag, #toeFlag{ display: none; }
-
     .result-row{ border-bottom: 1px solid #999; padding: 3px 0; }
     .result-label{ color: #000 !important; font-size: 0.66rem; white-space: nowrap; }
     .result-value{ color: #000; font-size: 0.95rem; white-space: nowrap; }
@@ -301,7 +329,7 @@
     .runs .r{ color: #000 !important; padding: 1.5px 0; font-size: 0.7rem; }
     .runs .r.tot{ border-top: 1px solid #000; }
 
-    .refbox img{ border: 1px solid #000; width: 100%; max-height: 1.5in; object-fit: contain; }
+    .refbox img{ border: 1px solid #000; width: 100%; max-height: var(--refH); object-fit: contain; }
     .refcap{ color: #000 !important; font-size: 0.58rem; margin-top: 3px; }
 
     .flag{
@@ -312,7 +340,7 @@
     .flag.warn::before{ content: "\26A0  "; }
 
     .notes-box{
-      height: 0.85in; background: #fff; border: 1px solid #000;
+      height: 0.75in; background: #fff; border: 1px solid #000;
       background-image: repeating-linear-gradient(
         to bottom,
         transparent, transparent calc(1.8em - 1px),
@@ -320,7 +348,7 @@
       );
     }
 
-    .btn, .upload-area, .cropbox, .steps, .hint{ display: none !important; }
+    .btn, .upload-area, .cropbox, .steps, .hint, .szctl{ display: none !important; }
   }
 </style>
 </head>
@@ -328,13 +356,17 @@
 <div class="wrap">
   <header>
     <h1>Ridge Measure + Load Plan</h1>
-    <div class="sub">Measure the ridge off an aerial, get the stacking plan for the driver</div>
+    <div class="sub">Measure the ridge off an aerial, get a suggested stacking plan for the driver</div>
   </header>
 
   <div class="panel p-aerial">
     <div class="panel-header">
       <p class="panel-label">Aerial</p>
-      <div style="display:flex; gap:8px;">
+      <div style="display:flex; gap:12px; align-items:center;">
+        <label class="szctl" title="How tall the aerial prints">Print
+          <input type="range" id="aerialSize" min="2" max="5.5" step="0.1" value="3.8">
+          <span id="aerialSizeVal">3.8"</span>
+        </label>
         <button class="btn" id="undoBtn">Undo</button>
         <button class="btn" id="newImgBtn">New image</button>
       </div>
@@ -393,9 +425,10 @@
 
   <div class="panel p-plan">
     <p class="panel-label">Suggested Plan</p>
+    <p class="plan-note">A starting point &mdash; the driver adjusts to what's on site.</p>
     <div class="facts">
     <div class="result-row">
-      <span class="result-label">Stack positions needed</span>
+      <span class="result-label">Stack positions</span>
       <span class="result-value" id="outPositions">&mdash;</span>
     </div>
     <div class="result-row">
@@ -421,6 +454,10 @@
     <div class="refbox">
       <img id="refImg" alt="Stack type reference photo">
       <div class="refcap" id="refCap">&mdash;</div>
+      <label class="szctl" style="margin-top:6px;" title="How tall the example photo prints">Print
+        <input type="range" id="refSize" min="0.8" max="2.5" step="0.05" value="1.25">
+        <span id="refSizeVal">1.25"</span>
+      </label>
     </div>
 
     <div id="fitFlag"></div>
@@ -491,22 +528,22 @@ function calc(){
   document.getElementById('outStack').textContent     = bandText + (band === '12' ? ' \u2014 kickers' : '');
 
   document.getElementById('refImg').src = REF[band];
-  document.getElementById('refCap').textContent = 'Stack it like this \u2014 ' + bandText;
+  document.getElementById('refCap').textContent = 'Example \u2014 ' + bandText;
 
   const kickFlag = document.getElementById('kickFlag');
   kickFlag.innerHTML = band === '12'
-    ? `<div class="flag warn">Kickers required at ${pitch}/12. Photos show 2\u20133 kickers per stack.`
-      + (pitch === 11 ? ' 11/12 is not on the posted sheet &mdash; staged as 12/12.' : '')
+    ? `<div class="flag warn">At ${pitch}/12 the posted examples use kickers &mdash; 2\u20133 per stack.`
+      + (pitch === 11 ? ' 11/12 is not on the posted sheet, so it follows 12/12 here.' : '')
       + `</div>`
     : '';
 
   const fitFlag = document.getElementById('fitFlag');
   fitFlag.innerHTML = fits
-    ? `<div class="flag">Load fits on this ridge run.</div>`
-    : `<div class="flag warn">Ridge run (${maxPositions} positions max) can't hold ${minPositionsNeeded} stacks at ${MAX_PER_STACK}/stack. Split load across a second ridge/hip or a second lift.</div>`;
+    ? `<div class="flag">Load fits on the ridge as traced.</div>`
+    : `<div class="flag warn">${bundles} bundles won't sit on ${ridge} ft of ridge at ${MAX_PER_STACK} per stack. Consider a second ridge or hip, or a second lift.</div>`;
 
   const toeFlag = document.getElementById('toeFlag');
-  toeFlag.innerHTML = toeClass ? `<div class="flag toe">Toe boards: ${toeText} for ${pitch}/12 pitch.</div>` : '';
+  toeFlag.innerHTML = toeClass ? `<div class="flag toe">Toe boards suggested at ${pitch}/12: ${toeText}.</div>` : '';
 
   S.plan = { usedPositions, base, remainder };
   if (!S.marksTouched) autoMarks();
@@ -1133,6 +1170,18 @@ document.getElementById('undoBtn').addEventListener('click', () => {
   ridgeEl.value = h.ridgeVal;
   calc(); updateHint();
 });
+
+function bindSize(id, outId, cssVar){
+  const el = document.getElementById(id), out = document.getElementById(outId);
+  const apply = () => {
+    document.documentElement.style.setProperty(cssVar, el.value + 'in');
+    out.textContent = el.value + '"';
+  };
+  el.addEventListener('input', apply);
+  apply();
+}
+bindSize('aerialSize', 'aerialSizeVal', '--aerialH');
+bindSize('refSize',    'refSizeVal',    '--refH');
 
 calc();
 </script>
