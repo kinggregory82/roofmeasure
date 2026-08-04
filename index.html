@@ -608,6 +608,7 @@ function runsOf(b){
 function bldgFt(b){ return runsOf(b).reduce((t, r) => t + segFt(r.sg), 0); }
 
 function calc(){
+  computeRunFt();
   syncBldgFromInputs();
 
   // One plan per structure. With a single structure this is identical to before.
@@ -888,6 +889,35 @@ function setImage(img){
     S.gray[p] = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
   }
 
+  // FULL-RESOLUTION grey, for scale-bar detection only.
+  //
+  // The analysis buffer above is capped at 1500px so drawing and tracing stay
+  // quick, and that cap was silently killing the legend: a screenshot off any
+  // normal monitor is 1920px or wider, so it gets resampled, and a 1px hairline
+  // does not survive resampling. Measured on a synthetic Earth legend, the
+  // flat-value spread across the bar goes 0 -> 44 at 1920px source and the mean
+  // drops under the brightness floor. The one screenshot that worked was 856px
+  // wide, i.e. already under the cap. Everything full-size failed.
+  // So detection runs at native resolution and the result is scaled back.
+  if (S.anW === img.width){
+    S.grayFull = S.gray; S.fullW = S.anW; S.fullH = S.anH;
+  } else {
+    const fo = document.createElement('canvas');
+    fo.width = img.width; fo.height = img.height;
+    const fctx = fo.getContext('2d', { willReadFrequently: true });
+    fctx.drawImage(img, 0, 0);
+    try {
+      const fd = fctx.getImageData(0, 0, img.width, img.height).data;
+      S.grayFull = new Uint8Array(img.width * img.height);
+      for (let i = 0, p = 0; p < S.grayFull.length; p++, i += 4){
+        S.grayFull[p] = d[i] * 0 + (fd[i] * 0.299 + fd[i+1] * 0.587 + fd[i+2] * 0.114);
+      }
+      S.fullW = img.width; S.fullH = img.height;
+    } catch (e) {
+      S.grayFull = S.gray; S.fullW = S.anW; S.fullH = S.anH;   // fall back
+    }
+  }
+
   S.ftPerPx = 0; S.bar = null; S.barCands = []; S.barIdx = 0;
   S.enhanced = null; buildEnhanced();
   S.ridges = []; S.draftSeg = null; S.ridgeDone = false;
@@ -900,7 +930,7 @@ function setImage(img){
   workArea.style.display = 'block';
   sizeStage();
 
-  const found = detectScaleBar();
+  const found = findBar();
   if (found) S.bar = found;
   setMode('scale');
   calc();
@@ -952,8 +982,22 @@ document.getElementById('newImgBtn').addEventListener('click', () => {
    ticks to rejoin the whole bar, and sample contrast along the length rather
    than at the midpoint -- a midpoint sample can land on a division tick, which
    sits at the line's own value and reads as zero contrast. */
-function detectFlatLine(){
-  const W = S.anW, H = S.anH, G = S.gray;
+// Columns inside the run where the line's own value rises at least 4px above
+// it -- the legend's ticks, drawn in the same ink as the line.
+function tickCols(a, b, y, v, W, H, G){
+  let n = 0;
+  for (let x = a; x <= b; x++){
+    let h = 0;
+    for (let yy = y - 1; yy >= 0 && yy > y - 13; yy--){
+      if (Math.abs(G[yy*W + x] - v) > 6) break;
+      h++;
+    }
+    if (h >= 4) n++;
+  }
+  return n;
+}
+
+function detectFlatLine(W, H, G){
   const near = (a, b, t) => Math.abs(a - b) <= t;
   const out = [];
 
@@ -971,22 +1015,37 @@ function detectFlatLine(){
     }
   };
 
-  for (let y = Math.floor(H * 0.45); y < H - 6; y++){
+  for (let y = Math.floor(H * 0.45); y < H; y++){
     let x = 0;
     while (x < W){
+      if (y < 4){ break; }
       const v = G[y*W + x];
       if (v < 100){ x++; continue; }
       let x2 = x;
       while (x2 + 1 < W && near(G[y*W + x2 + 1], v, 3)) x2++;
       if (x2 - x >= 45){
         const a = walk(x, y, v, -1), b = walk(x2, y, v, 1);
+        // The legend is a CONSTANT value laid over varying ground, so what
+        // marks it out is that it differs from the rows above and below -- in
+        // EITHER direction. Requiring "brighter" only was wrong: at 127 grey it
+        // is brighter than trees but DARKER where it crosses a road or a pale
+        // roof, and on his own screenshot several samples read negative.
+        // Sampled along the real bar, brighter-only at 35 scraped 65% against a
+        // 60% bar; either-direction at 25 gives 76%. That margin is the
+        // difference between finding it and not.
         let ok = 0, n = 0;
-        for (let i = 1; i <= 15; i++){
-          const cx = a + Math.floor((b - a) * i / 17);
+        for (let i = 1; i <= 21; i++){
+          const cx = a + Math.floor((b - a) * i / 23);
           n++;
-          if (v - G[(y-4)*W + cx] >= 35 && v - G[(y+4)*W + cx] >= 35) ok++;
+          const bel = y + 4 < H ? G[(y+4)*W + cx] : null;
+          if (Math.abs(v - G[(y-4)*W + cx]) >= 25 && (bel === null || Math.abs(v - bel) >= 25)) ok++;
         }
-        if (ok >= n * 0.6 && b - a >= 45) out.push({ x1:a, x2:b, y, len:b-a, t:1, flat:true });
+        // A scale legend carries tick marks; a UI divider does not. Loosening
+        // the contrast test above let the pale strip along the bottom of the
+        // Earth window in as a full-width candidate, and it outranked the real
+        // bar. Counted on his screenshot: real legend 6 tick columns, UI strip 0.
+        if (ok >= n * 0.55 && b - a >= 45 && tickCols(a, b, y, v, W, H, G) >= 2)
+          out.push({ x1:a, x2:b, y, len:b-a, t:1, flat:true });
       }
       x = Math.max(x2, x) + 1;
     }
@@ -995,24 +1054,30 @@ function detectFlatLine(){
   return out.slice(0, 4);   // keep it from crowding the candidate list
 }
 
-function detectScaleBar(){
-  const W = S.anW, H = S.anH, G = S.gray;
+function detectScaleBar(W, H, G){
   const maxThick = Math.max(3, Math.round(W / 500));
-  const y0 = Math.floor(H * 0.45), y1 = H - 6;
+  // Scan all the way to the last row. A SNIPPING-TOOL CROP ends right at the
+  // footer, so the bar can sit in the final two rows -- on his Maps snip it was
+  // at rows 453-454 of a 457-tall image while the scan stopped at 451, which is
+  // why it found nothing. And when the bar is that close to the edge there IS
+  // no row 4px below it, so that half of the ridge test is skipped rather than
+  // failed; the row above still has to clear the same margin.
+  const y0 = Math.floor(H * 0.45), y1 = H;
   let best = null, all = [];
 
   for (let y = y0; y < y1; y++){
     let run = 0;
     for (let x = 0; x <= W; x++){
       let isBar = false;
-      if (x < W && y >= 4 && y < H - 4){
+      if (x < W && y >= 4){
         const g = G[y*W + x];
-        if (g > 140 && g - G[(y-4)*W + x] > 60 && g - G[(y+4)*W + x] > 60) isBar = true;
+        const below = y + 4 < H ? G[(y+4)*W + x] : null;
+        if (g > 140 && g - G[(y-4)*W + x] > 60 && (below === null || g - below > 60)) isBar = true;
       }
       if (isBar){ run++; }
       else {
         if (run >= 40){
-          const c = vetBar(x - run, x - 1, y, maxThick);
+          const c = vetBar(x - run, x - 1, y, maxThick, W, H, G);
           if (c) { all.push(c); best = pickBar(best, c); }
         }
         run = 0;
@@ -1022,7 +1087,7 @@ function detectScaleBar(){
   // De-duplicate near-identical rows of the same bar, then order right to left
   // so stepping through goes Maps corner first, Earth corner last.
   const seen = [];
-  const merged = all.concat(detectFlatLine());
+  const merged = all.concat(detectFlatLine(W, H, G));
   merged.sort((a, b) => b.x2 - a.x2 || a.y - b.y);
   for (const c of merged){
     if (seen.some(p => Math.abs(p.x1 - c.x1) <= 6 && Math.abs(p.x2 - c.x2) <= 6)) continue;
@@ -1032,8 +1097,41 @@ function detectScaleBar(){
 
   // The Maps winner is untouched -- a Maps screenshot resolves exactly as before.
   // The Earth line is only promoted when the Maps scan came back with nothing.
-  const winner = best || seen.find(c => c.flat) || null;
-  S.barIdx = winner ? Math.max(0, seen.findIndex(c => c.x1 === winner.x1 && c.y === winner.y)) : 0;
+  let winner = best || seen.find(c => c.flat) || null;
+  // Both passes can find the same bar a row apart, and dedupe keeps only one of
+  // them. Hand back the survivor rather than the discarded twin, or "Different
+  // bar" would be cycling a list the current selection is not in.
+  if (winner && !seen.includes(winner)){
+    const twin = seen.find(c => Math.abs(c.x1 - winner.x1) <= 6 && Math.abs(c.x2 - winner.x2) <= 6);
+    if (twin) winner = twin;
+  }
+  S.barIdx = Math.max(0, seen.indexOf(winner));
+  return winner;
+}
+
+/* Detect on the full-resolution image, then convert every candidate into the
+   analysis coordinate system everything else (crop, canvas, ftPerPx) works in.
+   Doing it the other way round is what broke on full-size screenshots. */
+function findBar(){
+  const useFull = S.grayFull && S.fullW;
+  const W = useFull ? S.fullW : S.anW;
+  const H = useFull ? S.fullH : S.anH;
+  const G = useFull ? S.grayFull : S.gray;
+
+  const winner = detectScaleBar(W, H, G);
+  const sc = S.anW / W;
+  if (sc !== 1){
+    const conv = c => {
+      c.x1 = Math.round(c.x1 * sc);
+      c.x2 = Math.round(c.x2 * sc);
+      c.y  = Math.round(c.y * sc);
+      c.lenFull = c.len;          // keep the native-pixel length for reference
+      c.len = c.x2 - c.x1;
+      return c;
+    };
+    (S.barCands || []).forEach(conv);
+    if (winner && !(S.barCands || []).includes(winner)) conv(winner);
+  }
   return winner;
 }
 
@@ -1042,8 +1140,7 @@ function barCorner(c){
   return c.x1 < S.anW * 0.45 ? 'earth' : 'maps';
 }
 
-function vetBar(xs, xe, y, maxThick){
-  const W = S.anW, H = S.anH, G = S.gray;
+function vetBar(xs, xe, y, maxThick, W, H, G){
   const mx = (xs + xe) >> 1;
 
   // hairline thickness -- rejects field edges and thumbnail borders
@@ -1311,11 +1408,41 @@ function updateHint(){
 
 function segLenPx(s){ return Math.hypot(s.x2 - s.x1, s.y2 - s.y1); }
 
-// measurements always round UP -- short on a roof load is worse than long
-function segFt(sg){ return S.ftPerPx ? Math.ceil(segLenPx(sg) * S.ftPerPx) : 0; }
+function segFtRaw(sg){ return S.ftPerPx ? segLenPx(sg) * S.ftPerPx : 0; }
+
+/* Measurements still round UP -- short on a roof load is worse than long -- but
+   the total is rounded up ONCE, not once per run.
+
+   Ceiling every run and then adding them was inflating the ridge: it costs half
+   a foot per run on average, so a six-run roof read ~3 ft long and a ten-run
+   roof up to 8 ft. That is why the ridge measured longer than the actual.
+
+   So: ceil the structure's raw total, then hand out the whole feet to its runs
+   by largest remainder. The rows still add up to the total exactly, which is
+   what made per-run ceilings tempting in the first place, but the total is only
+   rounded once. */
+function computeRunFt(){
+  S.ridges.forEach(sg => { sg._ft = 0; });
+  const groups = {};
+  S.ridges.forEach(sg => { (groups[sg.b | 0] = groups[sg.b | 0] || []).push(sg); });
+  Object.values(groups).forEach(rs => {
+    const raw = rs.map(segFtRaw);
+    const total = Math.ceil(raw.reduce((a, v) => a + v, 0));
+    const base = raw.map(Math.floor);
+    let left = total - base.reduce((a, v) => a + v, 0);
+    const order = raw.map((v, i) => [v - Math.floor(v), i]).sort((a, b) => b[0] - a[0]);
+    for (let k = 0; left > 0 && order.length; k++, left--) base[order[k % order.length][1]]++;
+    rs.forEach((sg, i) => { sg._ft = base[i]; });
+  });
+}
+
+function segFt(sg){
+  if (!S.ftPerPx) return 0;
+  return sg._ft != null ? sg._ft : Math.ceil(segFtRaw(sg));
+}
 function ridgeTotalFt(){
   let t = S.ridges.reduce((a, sg) => a + segFt(sg), 0);
-  if (S.draftSeg) t += segFt(S.draftSeg);
+  if (S.draftSeg) t += Math.ceil(segFtRaw(S.draftSeg));
   return t;
 }
 
@@ -1327,6 +1454,7 @@ function ridgePxLen(){
 
 function syncRidgeInput(){
   if (!S.ridges.length || !S.ftPerPx) return;
+  computeRunFt();
   S.bldgs.forEach((bd, b) => {
     if (!runsOf(b).length) return;
     bd.ridge = bldgFt(b);
@@ -1633,7 +1761,7 @@ stage.addEventListener('pointerup', () => {
   if (!S.drag) return;
   S.drag = null;
   if (S.mode === 'scale'){
-    if (S.bar && S.bar.len < 12){ S.bar = detectScaleBar(); }
+    if (S.bar && S.bar.len < 12){ S.bar = findBar(); }
     refreshReadings();
     if (S.bar && S.bar.manual){
       const t = document.getElementById('typedVal');
