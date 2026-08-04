@@ -135,6 +135,16 @@
   .cropnav span{ font-size:11px; letter-spacing:.04em; color:var(--dim); }
   .cropnav .btn{ flex:0 0 auto; padding:3px 9px; font-size:11px; }
   .typedwrap .typedrow input{ font-size:15px; font-weight:600; }
+  /* One block per structure -- structure 2 onward is an exact repeat of the
+     first, so there is nothing new to learn when a job has a garage too. */
+  .struct + .struct{ margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+  .struct-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  .struct-name{ font-family:'Oswald',sans-serif; font-size:11px; font-weight:700;
+    letter-spacing:.14em; text-transform:uppercase; color:var(--steel); }
+  .struct-head .btn{ padding:2px 8px; font-size:11px; }
+  #addStructBtn{ margin-top:12px; width:100%; }
+  .rhead .bgrp, .runlist .bgrp{ font-weight:700; color:var(--ink); padding-top:6px; }
+  .bsub{ font-weight:400; font-size:11px; color:var(--dim); }
   .typedwrap{ margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--line); }
   .typedwrap label{ display:block; font-size:11px; letter-spacing:.04em; color:var(--dim); margin-bottom:5px; }
   .typedrow{ display:flex; gap:6px; }
@@ -441,6 +451,7 @@
       <div class="steps">
         <button class="btn" id="modeScale">1. Scale bar</button>
         <button class="btn" id="modeRidge">2. Ridges</button>
+        <button class="btn" id="newBldgBtn" title="Start another roof — its ridges, bundles and pitch stay separate">+ Structure</button>
         <button class="btn" id="doneRidgeBtn">Done tracing</button>
         <button class="btn" id="modeMarks">3. Stack marks</button>
         <button class="btn" id="respaceBtn">Re-space</button>
@@ -483,20 +494,8 @@
       <p class="panel-label">Job Inputs</p>
       <button class="btn" id="resetBtn">Reset</button>
     </div>
-    <div class="field">
-      <label for="ridge">Ridge length (ft)</label>
-      <input type="number" id="ridge" value="40" min="1" step="0.5">
-    </div>
-    <div class="grid2">
-      <div class="field">
-        <label for="bundles">Total bundles</label>
-        <input type="number" id="bundles" value="72" min="1" step="1">
-      </div>
-      <div class="field">
-        <label for="pitch">Pitch (X / 12)</label>
-        <input type="number" id="pitch" value="6" min="0" step="1">
-      </div>
-    </div>
+    <div id="structures"></div>
+    <button class="btn" id="addStructBtn">+ Add Structure</button>
   </div>
 
   <div class="panel p-plan">
@@ -562,65 +561,134 @@ const MIN_PER_STACK = 6;
 const TARGET_PER_STACK = 12;
 const BUNDLE_WIDTH_FT = 1;
 
-const ridgeEl   = document.getElementById('ridge');
-const bundlesEl = document.getElementById('bundles');
-const pitchEl   = document.getElementById('pitch');
+// Inputs are per structure now. These helpers replace the old single handles.
+const ridgeElOf   = b => document.getElementById('ridge-' + b);
+const bundlesElOf = b => document.getElementById('bundles-' + b);
+const pitchElOf   = b => document.getElementById('pitch-' + b);
 
-function calc(){
-  const ridge   = parseFloat(ridgeEl.value) || 0;
-  const bundles = parseInt(bundlesEl.value) || 0;
-  const pitch   = parseFloat(pitchEl.value) || 0;
+/* Staging band and toe-board call, from BCC's posted wall sheet. Split out of
+   calc() so each building can be judged on its own pitch. */
+function bandFor(pitch){
+  if (pitch <= 8)  return { band: '08', bandText: '8/12 or less'     };
+  if (pitch <= 10) return { band: '10', bandText: '10/12 or less'    };
+  return             { band: '12', bandText: '12/12 or greater' };
+}
+function toeFor(pitch){
+  if (pitch < 6)  return { toeText: 'Not required',   toeClass: ''    };
+  if (pitch < 10) return { toeText: 'Standard',       toeClass: 'toe' };
+  return            { toeText: 'Crossed boards', toeClass: 'toe' };
+}
+// A representative pitch for a band, so the caption can be rebuilt from it
+function pitchOfBand(b){ return b === '08' ? 8 : b === '10' ? 10 : 12; }
 
-  const maxPositions      = Math.max(1, Math.floor(ridge / BUNDLE_WIDTH_FT));
+/* The original single-roof maths, unchanged -- just callable per building so a
+   house and a garage can each carry their own bundle count. */
+function planFor(ridge, bundles){
+  const maxPositions       = Math.max(1, Math.floor(ridge / BUNDLE_WIDTH_FT));
   const minPositionsNeeded = Math.max(1, Math.ceil(bundles / MAX_PER_STACK));
   const fits = minPositionsNeeded <= maxPositions;
 
   const maxPositionsByFloor = Math.max(1, Math.floor(bundles / MIN_PER_STACK));
   const idealPositions      = Math.max(1, Math.round(bundles / TARGET_PER_STACK));
-  const usedPositions = Math.min(Math.max(idealPositions, minPositionsNeeded), maxPositionsByFloor, maxPositions, bundles);
+  const usedPositions = Math.min(Math.max(idealPositions, minPositionsNeeded),
+                                 maxPositionsByFloor, maxPositions, Math.max(1, bundles));
 
   const base      = Math.floor(bundles / usedPositions);
   const remainder = bundles % usedPositions;
-  const perStackDisplay = remainder === 0 ? `${base}` : `${base}\u2013${base + 1}`;
+  const spacing   = usedPositions > 1 ? (ridge / (usedPositions + 1)) : (ridge / 2);
+  return { ridge, bundles, usedPositions, base, remainder, spacing, fits };
+}
 
-  const spacing = usedPositions > 1 ? (ridge / (usedPositions + 1)) : (ridge / 2);
+// Runs belonging to one building, as [{sg, i}] with i the global run index.
+function runsOf(b){
+  const out = [];
+  S.ridges.forEach((sg, i) => { if ((sg.b | 0) === b) out.push({ sg, i }); });
+  return out;
+}
+function bldgFt(b){ return runsOf(b).reduce((t, r) => t + segFt(r.sg), 0); }
 
-  let toeText, toeClass;
-  if (pitch < 6)       { toeText = 'Not required';   toeClass = ''; }
-  else if (pitch < 10) { toeText = 'Standard';       toeClass = 'toe'; }
-  else                 { toeText = 'Crossed boards'; toeClass = 'toe'; }
+function calc(){
+  syncBldgFromInputs();
 
-  let band, bandText;
-  if (pitch <= 8)       { band = '08'; bandText = '8/12 or less';      }
-  else if (pitch <= 10) { band = '10'; bandText = '10/12 or less';     }
-  else                  { band = '12'; bandText = '12/12 or greater';  }
+  // One plan per structure. With a single structure this is identical to before.
+  S.plans = S.bldgs.map((bd, b) => {
+    // traced runs win over the typed figure, but only for structures that have any
+    const ft = runsOf(b).length ? bldgFt(b) : (bd.ridge || 0);
+    return planFor(ft, bd.bundles);
+  });
+  S.plan = S.plans[0] || planFor(0, 0);
+
+  const ridge   = S.plans.reduce((t, p) => t + p.ridge, 0);
+  const bundles = S.plans.reduce((t, p) => t + p.bundles, 0);
+  const usedPositions = S.plans.reduce((t, p) => t + p.usedPositions, 0);
+  const fits = S.plans.every(p => p.fits);
+
+  // Across buildings the per-stack figure is a range, not one number
+  const lo = Math.min(...S.plans.map(p => p.base));
+  const hi = Math.max(...S.plans.map(p => p.base + (p.remainder ? 1 : 0)));
+  const perStackDisplay = lo === hi ? `${lo}` : `${lo}\u2013${hi}`;
+
+  const spacing = S.plans.reduce((t, p) => t + p.spacing * p.usedPositions, 0)
+                  / Math.max(1, usedPositions);
+
+  // Pitch is per building now, so the staging band and toe-board call are
+  // worked out for each one and only collapsed to a single row when they agree.
+  S.plans.forEach((p, b) => {
+    p.pitch = S.bldgs[b].pitch;
+    Object.assign(p, bandFor(p.pitch), toeFor(p.pitch));
+  });
+  const bands = [...new Set(S.plans.map(p => p.band))];
+  const toes  = [...new Set(S.plans.map(p => p.toeText))];
+  const many  = S.bldgs.length > 1;
+
+  // The sheet carries ONE example photo, so show the most demanding band on the
+  // job -- a driver who stages the steepest roof right will not get the flatter
+  // one wrong, and the per-building bands are spelled out in the run list.
+  const band     = bands.slice().sort().pop();
+  const bandText = bandFor(pitchOfBand(band)).bandText;
+  const toeText  = toes.length === 1 ? toes[0] : 'Varies \u2014 see list';
+  const toeClass = S.plans.some(p => p.toeClass) ? 'toe' : '';
 
   document.getElementById('outPositions').textContent = usedPositions;
   document.getElementById('outPerStack').textContent  = perStackDisplay;
   document.getElementById('outSpacing').textContent   = Math.ceil(spacing) + ' ft'
-    + (S.ridges && S.ridges.length > 1 ? ' avg' : '');
+    + ((S.ridges && S.ridges.length > 1) || S.bldgs.length > 1 ? ' avg' : '');
   document.getElementById('outToe').textContent       = toeText;
-  document.getElementById('outStack').textContent     = bandText + (band === '12' ? ' \u2014 kickers' : '');
+  document.getElementById('outStack').textContent     = bands.length > 1
+    ? 'Varies \u2014 see list'
+    : bandText + (band === '12' ? ' \u2014 kickers' : '');
 
   document.getElementById('refImg').src = REF[band];
-  document.getElementById('refCap').textContent = 'Example \u2014 ' + bandText;
+  document.getElementById('refCap').textContent = 'Example \u2014 ' + bandText
+    + (bands.length > 1 ? ' (steepest on this job)' : '');
 
   const kickFlag = document.getElementById('kickFlag');
-  kickFlag.innerHTML = band === '12'
-    ? `<div class="flag warn">At ${pitch}/12 the posted examples use kickers &mdash; 2\u20133 per stack.`
-      + (pitch === 11 ? ' 11/12 is not on the posted sheet, so it follows 12/12 here.' : '')
+  const kickers = S.plans.map((p, b) => ({ p, b })).filter(x => x.p.band === '12');
+  kickFlag.innerHTML = kickers.length
+    ? `<div class="flag warn">`
+      + kickers.map(x => `${many ? bldgName(x.b) + ' at ' : 'At '}${x.p.pitch}/12`).join(', ')
+      + ` the posted examples use kickers &mdash; 2\u20133 per stack.`
+      + (kickers.some(x => x.p.pitch === 11) ? ' 11/12 is not on the posted sheet, so it follows 12/12 here.' : '')
       + `</div>`
     : '';
 
   const fitFlag = document.getElementById('fitFlag');
+  const over = S.plans.map((p, b) => ({ p, b })).filter(x => !x.p.fits);
   fitFlag.innerHTML = fits
     ? `<div class="flag">Load fits on the ridge as traced.</div>`
-    : `<div class="flag warn">${bundles} bundles won't sit on ${ridge} ft of ridge at ${MAX_PER_STACK} per stack. Consider a second ridge or hip, or a second lift.</div>`;
+    : over.map(x =>
+        `<div class="flag warn">${S.bldgs.length > 1 ? bldgName(x.b) + ': ' : ''}`
+        + `${x.p.bundles} bundles won't sit on ${x.p.ridge} ft of ridge at ${MAX_PER_STACK} per stack. `
+        + `Consider a second ridge or hip, or a second lift.</div>`).join('');
 
   const toeFlag = document.getElementById('toeFlag');
-  toeFlag.innerHTML = toeClass ? `<div class="flag toe">Toe boards suggested at ${pitch}/12: ${toeText}.</div>` : '';
+  const toed = S.plans.map((p, b) => ({ p, b })).filter(x => x.p.toeClass);
+  toeFlag.innerHTML = toed.length
+    ? `<div class="flag toe">Toe boards suggested \u2014 `
+      + toed.map(x => `${many ? bldgName(x.b) + ' ' : ''}${x.p.pitch}/12: ${x.p.toeText}`).join('; ')
+      + `.</div>`
+    : '';
 
-  S.plan = { usedPositions, base, remainder };
   if (!S.marksTouched) autoMarks();
   renderRunList();
   redraw();
@@ -628,17 +696,89 @@ function calc(){
   updateHint();
 }
 
-[ridgeEl, bundlesEl, pitchEl].forEach(el => el.addEventListener('input', () => {
-  if (el === ridgeEl) ridgeEl.classList.remove('measured');
-  calc();
-}));
+/* ---- one input block per structure ---- */
+function syncBldgFromInputs(){
+  S.bldgs.forEach((bd, b) => {
+    const rEl = ridgeElOf(b), bEl = bundlesElOf(b), pEl = pitchElOf(b);
+    if (rEl) bd.ridge   = parseFloat(rEl.value) || 0;
+    if (bEl) bd.bundles = parseInt(bEl.value) || 0;
+    if (pEl) bd.pitch   = parseFloat(pEl.value) || 0;
+  });
+}
+
+// Structure 2 onward is an exact repeat of the first block. With one structure
+// the panel is identical to the original sheet -- no heading, no extra chrome.
+function renderBundleInputs(){
+  const wrap = document.getElementById('structures');
+  const many = S.bldgs.length > 1;
+  const measured = b => (S.ridges.length && S.ftPerPx && runsOf(b).length) ? ' measured' : '';
+
+  wrap.innerHTML = S.bldgs.map((bd, b) => `
+    <div class="struct" data-b="${b}">
+      ${many ? `<div class="struct-head">
+          <span class="struct-name">${bldgName(b)}</span>
+          ${b > 0 ? `<button class="btn bdel" data-del="${b}" title="Remove this structure">Remove</button>` : ''}
+        </div>` : ''}
+      <div class="field">
+        <label for="ridge-${b}">Ridge length (ft)</label>
+        <input type="number" id="ridge-${b}" class="${measured(b)}" value="${bd.ridge}" min="1" step="0.5">
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="bundles-${b}">Bundles</label>
+          <input type="number" id="bundles-${b}" value="${bd.bundles}" min="1" step="1">
+        </div>
+        <div class="field">
+          <label for="pitch-${b}">Pitch (X / 12)</label>
+          <input type="number" id="pitch-${b}" value="${bd.pitch}" min="0" step="1">
+        </div>
+      </div>
+    </div>`).join('');
+
+  S.bldgs.forEach((bd, b) => {
+    ['ridge-' + b, 'bundles-' + b, 'pitch-' + b].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('input', () => {
+        if (id.startsWith('ridge')) el.classList.remove('measured');
+        S.marksTouched = false;
+        calc();
+      });
+    });
+  });
+  wrap.querySelectorAll('[data-del]').forEach(btn =>
+    btn.addEventListener('click', () => removeBldg(+btn.dataset.del)));
+}
+
+function removeBldg(b){
+  if (b <= 0 || b >= S.bldgs.length) return;
+  S.bldgs.splice(b, 1);
+  // its runs go with it; anything filed above it shifts down
+  S.ridges = S.ridges.filter(sg => (sg.b | 0) !== b);
+  S.ridges.forEach(sg => { if ((sg.b | 0) > b) sg.b--; });
+  S.curB = Math.min(S.curB, S.bldgs.length - 1);
+  S.marks = []; S.marksTouched = false;
+  renderBundleInputs(); calc(); redraw();
+}
+
+function addStructure(){
+  const last = S.bldgs[S.bldgs.length - 1];
+  S.bldgs.push({ ridge: last.ridge, bundles: last.bundles, pitch: last.pitch });
+  S.curB = S.bldgs.length - 1;
+  S.ridgeDone = false;
+  S.marks = []; S.marksTouched = false;
+  setMode('ridge');
+  renderBundleInputs(); calc(); redraw(); updateHint();
+}
+document.getElementById('newBldgBtn').addEventListener('click', addStructure);
+document.getElementById('addStructBtn').addEventListener('click', addStructure);
 
 const DEFAULTS = { ridge: 40, bundles: 72, pitch: 6 };
 document.getElementById('resetBtn').addEventListener('click', () => {
-  ridgeEl.value = DEFAULTS.ridge;
-  bundlesEl.value = DEFAULTS.bundles;
-  pitchEl.value = DEFAULTS.pitch;
-  ridgeEl.classList.remove('measured');
+  S.bldgs = [{ ...DEFAULTS }];
+  S.plans = []; S.curB = 0;
+  S.marks = []; S.marksTouched = false;
+  renderBundleInputs();
   calc();
 });
 
@@ -649,12 +789,26 @@ function renderRunList(){
 
   let rows = `<div class="rhead"><span>Ridge run</span><span>Stacks</span></div>`;
   let totFt = 0, totStacks = 0;
-  S.ridges.forEach((sg, i) => {
-    const ft = segFt(sg);
-    const cnt = S.marks.filter(m => m.run === i).length;
-    totFt += ft; totStacks += cnt;
-    rows += `<div class="r"><span>${ft ? ft + ' ft' : '\u2014'}</span>`
-      + `<span>${S.ridgeDone && cnt ? `<b>${cnt}</b> \u00d7 ${S.plan ? S.plan.base : ''}` : '\u2014'}</span></div>`;
+  const many = S.bldgs.length > 1;
+  S.bldgs.forEach((bd, b) => {
+    const rs = runsOf(b);
+    if (!rs.length) return;
+    const plan = S.plans[b];
+    if (many){
+      const bft = bldgFt(b);
+      const bcnt = S.marks.filter(m => (m.b | 0) === b).length;
+      const bandTxt = plan ? plan.bandText + (plan.band === '12' ? ' \u2014 kickers' : '') : '';
+      rows += `<div class="r bgrp"><span>${bldgName(b)} \u2014 ${bft} ft`
+        + `${bandTxt ? `<br><span class="bsub">${plan.pitch}/12 \u2014 ${bandTxt}</span>` : ''}</span>`
+        + `<span>${S.ridgeDone ? bcnt + ' \u00d7 ' + (plan ? plan.base : '') : bd.bundles + ' bdl'}</span></div>`;
+    }
+    rs.forEach(r => {
+      const ft = segFt(r.sg);
+      const cnt = S.marks.filter(m => m.run === r.i).length;
+      totFt += ft; totStacks += cnt;
+      rows += `<div class="r"><span>${ft ? ft + ' ft' : '\u2014'}</span>`
+        + `<span>${S.ridgeDone && cnt ? `<b>${cnt}</b> \u00d7 ${plan ? plan.base : ''}` : '\u2014'}</span></div>`;
+    });
   });
   rows += `<div class="r tot"><span><b>${totFt ? totFt + ' ft' : '\u2014'}</b> total</span>`
     + `<span>${S.ridgeDone ? totStacks + ' stacks' : '\u2014'}</span></div>`;
@@ -668,7 +822,10 @@ const S = {
   gray: null,
   ftPerPx: 0,
   bar: null,           // {x1,x2,y,len}
-  ridges: [],          // [{x1,y1,x2,y2}] -- one per ridge run
+  ridges: [],          // [{x1,y1,x2,y2,b}] -- one per ridge run, b = building index
+  bldgs: [{ ridge: 40, bundles: 72, pitch: 6 }],  // per structure: ridge, bundles, pitch
+  plans: [],           // one plan per building, same order
+  curB: 0,             // building new ridge runs get filed under
   draftSeg: null,      // segment being dragged right now
   ridgeDone: false,    // he has said he's finished tracing
   marks: [],
@@ -734,6 +891,9 @@ function setImage(img){
   S.ftPerPx = 0; S.bar = null; S.barCands = []; S.barIdx = 0;
   S.enhanced = null; buildEnhanced();
   S.ridges = []; S.draftSeg = null; S.ridgeDone = false;
+  S.bldgs = [{ ...DEFAULTS, bundles: (S.bldgs[0] || DEFAULTS).bundles,
+                             pitch:   (S.bldgs[0] || DEFAULTS).pitch }];
+  S.plans = []; S.curB = 0; renderBundleInputs();
   S.marks = []; S.marksTouched = false; S.history = [];
 
   uploadArea.style.display = 'none';
@@ -1134,8 +1294,10 @@ function updateHint(){
     const list = S.ridges.map((sg, i) =>
       `<br>&nbsp;&nbsp;${i+1}. ${S.ftPerPx ? segFt(sg) + ' ft' : Math.round(segLenPx(sg)) + ' px'}`
     ).join('');
+    const who = S.bldgs.length > 1 ? ` <b>(${bldgName(S.curB)})</b>` : '';
     hintEl.innerHTML =
-      `<b>Drag along each ridge run</b>, peak end to peak end. Drag again for the next one.` +
+      `<b>Drag along each ridge run</b>${who}, peak end to peak end. Drag again for the next one.` +
+      (S.bldgs.length > 1 ? `<br>Hit <b>+ Structure</b> before tracing a separate roof.` : '') +
       (n ? `${list}<br><b>${n} run${n>1?'s':''}` + (tot ? `, ${tot} ft total` : '') + `</b>` : '') +
       (n ? `<br>Hit <b>Done tracing</b> when every ridge is drawn.` : '');
   } else {
@@ -1165,8 +1327,12 @@ function ridgePxLen(){
 
 function syncRidgeInput(){
   if (!S.ridges.length || !S.ftPerPx) return;
-  ridgeEl.value = ridgeTotalFt();
-  ridgeEl.classList.add('measured');
+  S.bldgs.forEach((bd, b) => {
+    if (!runsOf(b).length) return;
+    bd.ridge = bldgFt(b);
+    const el = ridgeElOf(b);
+    if (el){ el.value = bd.ridge; el.classList.add('measured'); }
+  });
 }
 
 function toStage(p){ const k = stage.width / S.anW; return { x: p.x * k, y: p.y * k }; }
@@ -1315,8 +1481,10 @@ function redraw(){
     // badge says what the driver needs: stacks on this run, once tracing is finished
     const cnt = S.marks.filter(m => m.run === i).length;
     const ftTxt = S.ftPerPx ? segFt(sg) + ' ft' : '';
+    const bIdx = sg ? (sg.b | 0) : 0;
+    const bPlan = S.plans[bIdx];
     const label = (S.ridgeDone && cnt)
-      ? cnt + '\u00d7' + (S.plan ? S.plan.base : '')
+      ? cnt + '\u00d7' + (bPlan ? bPlan.base : '')
       : (ftTxt || String(i + 1));
     sctx.font = '700 13px "JetBrains Mono", monospace';
     const bw = Math.max(20, sctx.measureText(label).width + 12), bh = 18;
@@ -1473,6 +1641,7 @@ stage.addEventListener('pointerup', () => {
     }
   } else if (S.mode === 'ridge'){
     if (S.draftSeg && segLenPx(S.draftSeg) >= 8){
+      S.draftSeg.b = S.curB | 0;
       S.ridges.push(S.draftSeg);
       S.ridgeDone = false;
       S.marks = []; S.marksTouched = false;
@@ -1485,8 +1654,8 @@ stage.addEventListener('pointerup', () => {
 });
 
 /* ============================ marks ============================ */
-function allocPositions(n){
-  const L = S.ridges.map(segLenPx);
+function allocPositions(n, segs){
+  const L = (segs || S.ridges).map(segLenPx);
   const T = L.reduce((a, b) => a + b, 0);
   if (!T) return L.map(() => 0);
   const exact = L.map(l => n * l / T);
@@ -1497,17 +1666,33 @@ function allocPositions(n){
   return out;
 }
 
+/* Marks are allocated INSIDE each building, never pooled across them -- a
+   garage's bundles must not end up apportioned onto the house's ridge. */
 function autoMarks(){
-  if (!S.ridgeDone || !S.ridges.length || !S.plan) return;
-  const per = allocPositions(S.plan.usedPositions);
+  if (!S.ridgeDone || !S.ridges.length || !S.plans.length) return;
   S.marks = [];
-  S.ridges.forEach((sg, j) => {
-    const c = per[j];
-    for (let i = 1; i <= c; i++){
-      const f = i / (c + 1);
-      S.marks.push({ x: sg.x1 + (sg.x2 - sg.x1) * f, y: sg.y1 + (sg.y2 - sg.y1) * f, run: j });
-    }
+  S.bldgs.forEach((bd, b) => {
+    const rs = runsOf(b);
+    if (!rs.length) return;
+    const plan = S.plans[b];
+    if (!plan) return;
+    const per = allocPositions(plan.usedPositions, rs.map(r => r.sg));
+    rs.forEach((r, j) => {
+      const c = per[j];
+      for (let i = 1; i <= c; i++){
+        const f = i / (c + 1);
+        S.marks.push({
+          x: r.sg.x1 + (r.sg.x2 - r.sg.x1) * f,
+          y: r.sg.y1 + (r.sg.y2 - r.sg.y1) * f,
+          run: r.i, b
+        });
+      }
+    });
   });
+}
+
+function bldgName(b){
+  return S.bldgs[b] && S.bldgs[b].name ? S.bldgs[b].name : 'Structure ' + (b + 1);
 }
 
 document.getElementById('doneRidgeBtn').addEventListener('click', () => {
@@ -1540,7 +1725,7 @@ function pushHistory(){
     marks: S.marks.map(m => ({ ...m })),
     marksTouched: S.marksTouched,
     ftPerPx: S.ftPerPx,
-    ridgeVal: ridgeEl.value
+    ridgeVals: S.bldgs.map(bd => bd.ridge)
   });
   if (S.history.length > 40) S.history.shift();
 }
@@ -1550,7 +1735,8 @@ document.getElementById('undoBtn').addEventListener('click', () => {
   if (!h) return;
   S.bar = h.bar; S.ridges = h.ridges; S.ridgeDone = h.ridgeDone; S.marks = h.marks;
   S.marksTouched = h.marksTouched; S.ftPerPx = h.ftPerPx;
-  ridgeEl.value = h.ridgeVal;
+  (h.ridgeVals || []).forEach((v, b) => { if (S.bldgs[b]) S.bldgs[b].ridge = v; });
+  renderBundleInputs();
   calc(); updateHint();
 });
 
@@ -1565,6 +1751,7 @@ function bindSize(id, outId, cssVar){
 }
 bindSize('aerialSize', 'aerialSizeVal', '--aerialH');
 
+renderBundleInputs();
 calc();
 </script>
 </body>
