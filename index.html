@@ -131,6 +131,16 @@
     margin: 12px 0 6px;
   }
   .readings{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .cropnav{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin:6px 0 7px; }
+  .cropnav span{ font-size:11px; letter-spacing:.04em; color:var(--dim); }
+  .cropnav .btn{ flex:0 0 auto; padding:3px 9px; font-size:11px; }
+  .typedwrap .typedrow input{ font-size:15px; font-weight:600; }
+  .typedwrap{ margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--line); }
+  .typedwrap label{ display:block; font-size:11px; letter-spacing:.04em; color:var(--dim); margin-bottom:5px; }
+  .typedrow{ display:flex; gap:6px; }
+  .typedrow input{ flex:1 1 auto; min-width:0; }
+  .typedrow select{ flex:0 0 62px; }
+  .typednote{ font-size:11px; color:var(--dim); margin-top:5px; min-height:14px; }
   .rbtn{
     background: transparent;
     border: 1px solid var(--line);
@@ -437,8 +447,25 @@
 
       <div class="cropbox" id="cropBox">
         <canvas id="cropCanvas"></canvas>
-        <div class="reading-label">Read the bar above, tap what it says</div>
+        <div class="cropnav">
+          <span id="readingLabel">Read the bar above, tap what it says</span>
+          <button class="btn" id="otherBar" style="display:none">Different bar</button>
+        </div>
         <div class="readings" id="readings"></div>
+        <div class="typedwrap">
+          <label for="typedVal">Not listed? Type what the bar says</label>
+          <div class="typedrow">
+            <input type="number" id="typedVal" min="0" step="any" placeholder="230">
+            <select id="typedUnit">
+              <option value="ft">ft</option>
+              <option value="m">m</option>
+              <option value="mi">mi</option>
+              <option value="km">km</option>
+            </select>
+            <button class="btn" id="typedApply">Use this</button>
+          </div>
+          <div class="typednote" id="typedNote"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -697,7 +724,7 @@ function setImage(img){
     S.gray[p] = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
   }
 
-  S.ftPerPx = 0; S.bar = null;
+  S.ftPerPx = 0; S.bar = null; S.barCands = []; S.barIdx = 0;
   S.ridges = []; S.draftSeg = null; S.ridgeDone = false;
   S.marks = []; S.marksTouched = false; S.history = [];
 
@@ -719,7 +746,7 @@ function sizeStage(){
 window.addEventListener('resize', () => { if (S.img){ sizeStage(); redraw(); } });
 
 document.getElementById('newImgBtn').addEventListener('click', () => {
-  S.img = null; S.gray = null; S.bar = null;
+  S.img = null; S.gray = null; S.bar = null; S.barCands = []; S.barIdx = 0;
   S.ridges = []; S.draftSeg = null; S.ridgeDone = false;
   S.marks = []; S.marksTouched = false; S.ftPerPx = 0; S.history = [];
   imgInput.value = '';
@@ -734,14 +761,77 @@ document.getElementById('newImgBtn').addEventListener('click', () => {
      ridge test alone            -> matched Street View thumbnail borders
      thin + ticks, lowest-wins   -> matched bright field edges
      hasLabel + lowest-wins      -> inverted on small images (glyphs anti-alias away)
-   RIGHTMOST + thin + end ticks is the version that holds. Google anchors the
-   bar to the bottom-right of the map; every false positive sits further left.
+   RIGHTMOST + thin + end ticks is the version that holds for GOOGLE MAPS, which
+   anchors its bar to the bottom-right of the map; every false positive sits
+   further left.
+
+   GOOGLE EARTH puts its scale legend in the BOTTOM-LEFT instead (View > Scale
+   Legend). Rightmost-wins still FINDS a lone left-hand bar -- it only prefers
+   the right when there is a choice -- so Earth breaks only when something else
+   in the frame also qualifies further right. Rather than guess at Earth's exact
+   geometry, every vetted candidate is kept in S.barCands (right to left) and a
+   "Different bar" button steps through them. Same principle as showing all
+   eleven readings: never let a rule decide what he is allowed to see.
    ============================================================================ */
+/* Google Earth draws its legend differently from Maps, and the Maps scan cannot
+   see it. Measured off his 76 Westmore Loop screenshot:
+     - the line is an OPAQUE FLAT VALUE (exactly 127 for its whole length),
+       under the >140 brightness floor the Maps scan requires
+     - ticks point UP only, and the end ticks are bright (255) while the
+       division ticks are drawn at the line's own value
+     - those bright ticks BREAK the run, so a plain scan returns one division
+   So: find long stretches of near-constant value, step across narrow bright
+   ticks to rejoin the whole bar, and sample contrast along the length rather
+   than at the midpoint -- a midpoint sample can land on a division tick, which
+   sits at the line's own value and reads as zero contrast. */
+function detectFlatLine(){
+  const W = S.anW, H = S.anH, G = S.gray;
+  const near = (a, b, t) => Math.abs(a - b) <= t;
+  const out = [];
+
+  const walk = (x, y, v, d) => {
+    for (;;){
+      const nx = x + d;
+      if (nx < 0 || nx >= W) return x;
+      if (near(G[y*W + nx], v, 6)) { x = nx; continue; }
+      if (G[y*W + nx] > v + 30){            // a tick: cross it only if narrow
+        let k = 0, p = nx;
+        while (p >= 0 && p < W && G[y*W + p] > v + 30 && k <= 5){ p += d; k++; }
+        if (k <= 5 && p >= 0 && p < W && near(G[y*W + p], v, 6)) { x = p; continue; }
+      }
+      return x;
+    }
+  };
+
+  for (let y = Math.floor(H * 0.45); y < H - 6; y++){
+    let x = 0;
+    while (x < W){
+      const v = G[y*W + x];
+      if (v < 100){ x++; continue; }
+      let x2 = x;
+      while (x2 + 1 < W && near(G[y*W + x2 + 1], v, 3)) x2++;
+      if (x2 - x >= 45){
+        const a = walk(x, y, v, -1), b = walk(x2, y, v, 1);
+        let ok = 0, n = 0;
+        for (let i = 1; i <= 15; i++){
+          const cx = a + Math.floor((b - a) * i / 17);
+          n++;
+          if (v - G[(y-4)*W + cx] >= 35 && v - G[(y+4)*W + cx] >= 35) ok++;
+        }
+        if (ok >= n * 0.6 && b - a >= 45) out.push({ x1:a, x2:b, y, len:b-a, t:1, flat:true });
+      }
+      x = Math.max(x2, x) + 1;
+    }
+  }
+  out.sort((p, q) => q.len - p.len);
+  return out.slice(0, 4);   // keep it from crowding the candidate list
+}
+
 function detectScaleBar(){
   const W = S.anW, H = S.anH, G = S.gray;
   const maxThick = Math.max(3, Math.round(W / 500));
   const y0 = Math.floor(H * 0.45), y1 = H - 6;
-  let best = null;
+  let best = null, all = [];
 
   for (let y = y0; y < y1; y++){
     let run = 0;
@@ -755,13 +845,33 @@ function detectScaleBar(){
       else {
         if (run >= 40){
           const c = vetBar(x - run, x - 1, y, maxThick);
-          if (c) best = pickBar(best, c);
+          if (c) { all.push(c); best = pickBar(best, c); }
         }
         run = 0;
       }
     }
   }
-  return best;
+  // De-duplicate near-identical rows of the same bar, then order right to left
+  // so stepping through goes Maps corner first, Earth corner last.
+  const seen = [];
+  const merged = all.concat(detectFlatLine());
+  merged.sort((a, b) => b.x2 - a.x2 || a.y - b.y);
+  for (const c of merged){
+    if (seen.some(p => Math.abs(p.x1 - c.x1) <= 6 && Math.abs(p.x2 - c.x2) <= 6)) continue;
+    seen.push(c);
+  }
+  S.barCands = seen;
+
+  // The Maps winner is untouched -- a Maps screenshot resolves exactly as before.
+  // The Earth line is only promoted when the Maps scan came back with nothing.
+  const winner = best || seen.find(c => c.flat) || null;
+  S.barIdx = winner ? Math.max(0, seen.findIndex(c => c.x1 === winner.x1 && c.y === winner.y)) : 0;
+  return winner;
+}
+
+function barCorner(c){
+  if (!c || !S.anW) return '';
+  return c.x1 < S.anW * 0.45 ? 'earth' : 'maps';
 }
 
 function vetBar(xs, xe, y, maxThick){
@@ -820,6 +930,30 @@ function refreshReadings(){
   box.style.display = 'block';
   drawCrop();
 
+  // Earth's bar is a fixed width whose NUMBER changes with zoom, so it lands on
+  // values like "230 m" that are not in the standard list. Say so rather than
+  // leaving him hunting for a button that will never be there.
+  const lab = document.getElementById('readingLabel');
+  const man = !!S.bar.manual;
+
+  // A hand-drawn measurement is the answer, not a correction to the detector:
+  // the eleven standard readings only mean something for a detected Maps bar,
+  // and offering them against his own drag would just be eleven wrong numbers.
+  document.getElementById('readings').style.display = man ? 'none' : '';
+  lab.textContent = man
+    ? `You measured ${S.bar.len} px — type what that distance is`
+    : barCorner(S.bar) === 'earth'
+      ? 'Bottom-left bar — Google Earth numbers are rarely round, so type it below'
+      : 'Read the bar above, tap what it says';
+
+  const n = (S.barCands || []).length;
+  const other = document.getElementById('otherBar');
+  other.style.display = (!man && n > 1) ? '' : 'none';
+  if (n > 1) other.textContent = `Different bar (${(S.barIdx|0) + 1}/${n})`;
+
+  const typedLab = document.querySelector('.typedwrap label');
+  typedLab.textContent = man ? 'How long is what you just drew?' : 'Not listed? Type what the bar says';
+
   const wrapEl2 = document.getElementById('readings');
   wrapEl2.innerHTML = '';
   const ridgePx = ridgePxLen();
@@ -835,7 +969,53 @@ function refreshReadings(){
     b.addEventListener('click', () => applyReading(r.ft));
     wrapEl2.appendChild(b);
   });
+  updateTypedNote();
 }
+
+/* Step through the other bars the scan vetted. Google Maps anchors bottom-right
+   and Google Earth bottom-left, so the list runs right to left and the Earth bar
+   is usually the last one. Beats hard-coding either layout. */
+document.getElementById('otherBar').addEventListener('click', () => {
+  const n = (S.barCands || []).length;
+  if (n < 2) return;
+  S.barIdx = ((S.barIdx | 0) + 1) % n;
+  S.bar = S.barCands[S.barIdx];
+  S.ftPerPx = 0;
+  refreshReadings();
+  redraw();
+});
+
+/* ---- typed reading: any number, any unit ---- */
+const UNIT_FT = { ft: 1, m: M2FT, mi: 5280, km: 1000 * M2FT };
+
+function typedFt(){
+  const v = parseFloat(document.getElementById('typedVal').value);
+  if (!isFinite(v) || v <= 0) return 0;
+  return v * (UNIT_FT[document.getElementById('typedUnit').value] || 1);
+}
+
+function updateTypedNote(){
+  const note = document.getElementById('typedNote');
+  const ft = typedFt();
+  if (!ft || !S.bar){ note.textContent = ''; return; }
+  const fpp = ft / S.bar.len;
+  const ridgePx = ridgePxLen();
+  note.textContent = ridgePx
+    ? `That makes the ridge ${Math.ceil(ridgePx * fpp)} ft`
+    : `That makes the picture ${Math.round(S.anW * fpp)} ft wide`;
+}
+
+['typedVal','typedUnit'].forEach(id =>
+  document.getElementById(id).addEventListener('input', updateTypedNote));
+
+document.getElementById('typedApply').addEventListener('click', () => {
+  const ft = typedFt();
+  if (!ft || !S.bar) return;
+  applyReading(ft);
+});
+document.getElementById('typedVal').addEventListener('keydown', e => {
+  if (e.key === 'Enter'){ e.preventDefault(); document.getElementById('typedApply').click(); }
+});
 
 function applyReading(ft){
   S.ftPerPx = ft / S.bar.len;
@@ -845,6 +1025,46 @@ function applyReading(ft){
 }
 
 function drawCrop(){
+  // A manual drag can run diagonally and sit anywhere on the image, so the
+  // fixed-height horizontal crop the detector uses would miss it. Show the
+  // whole measured line in context instead.
+  if (S.bar.manual){ drawManualCrop(); return; }
+  drawBarCrop();
+}
+
+function drawManualCrop(){
+  const k = S.img.width / S.anW;
+  const b = S.bar;
+  const pad = Math.max(30, b.len * 0.25);
+  const x0 = Math.max(0, (Math.min(b.ax1, b.ax2) - pad) * k);
+  const y0 = Math.max(0, (Math.min(b.ay1, b.ay2) - pad) * k);
+  const sw = Math.min(S.img.width  - x0, (Math.abs(b.ax2 - b.ax1) + pad*2) * k);
+  const sh = Math.min(S.img.height - y0, (Math.abs(b.ay2 - b.ay1) + pad*2) * k);
+
+  const outW = Math.min(600, Math.max(240, Math.round(sw)));
+  cropCv.width  = outW;
+  cropCv.height = Math.max(60, Math.round(outW * (sh / sw)));
+  cropCtx.imageSmoothingEnabled = true;
+  cropCtx.drawImage(S.img, x0, y0, sw, sh, 0, 0, cropCv.width, cropCv.height);
+
+  const f = cropCv.width / sw;
+  const px = x => (x * k - x0) * f, py = y => (y * k - y0) * f;
+  cropCtx.strokeStyle = '#d9a441';
+  cropCtx.lineWidth = 3;
+  cropCtx.beginPath();
+  cropCtx.moveTo(px(b.ax1), py(b.ay1));
+  cropCtx.lineTo(px(b.ax2), py(b.ay2));
+  cropCtx.stroke();
+  // end caps
+  [[b.ax1,b.ay1],[b.ax2,b.ay2]].forEach(([x,y]) => {
+    cropCtx.beginPath();
+    cropCtx.arc(px(x), py(y), 4, 0, Math.PI*2);
+    cropCtx.fillStyle = '#d9a441';
+    cropCtx.fill();
+  });
+}
+
+function drawBarCrop(){
   const k = S.img.width / S.anW;
   const pad = 20, halfH = 18;
   const sx = Math.max(0, (S.bar.x1 - pad) * k);
@@ -891,9 +1111,15 @@ function updateHint(){
   if (done) done.classList.toggle('ready', !!(S.ridges.length && !S.ridgeDone));
 
   if (S.mode === 'scale'){
-    hintEl.innerHTML = S.bar
-      ? `Scale bar found: <b>${S.bar.len} px</b>. Check the crop below and tap what it reads. Wrong bar? Drag along the right one on the image.`
-      : `No scale bar found. <b>Drag along the scale bar</b> on the image, then tap what it reads.`;
+    if (S.bar && S.bar.manual){
+      hintEl.innerHTML = `You measured <b>${S.bar.len} px</b>. Type that distance below.`
+        + `<br>Drag again to re-measure.`;
+    } else if (S.bar){
+      hintEl.innerHTML = `Auto-found a bar: <b>${S.bar.len} px</b> — check the crop below before trusting it.`
+        + `<br>Or <b>drag it yourself</b> on the image: along the scale bar, or along anything you know the length of.`;
+    } else {
+      hintEl.innerHTML = `<b>Drag along the scale bar</b> on the image — or along anything you know the length of — then type the distance.`;
+    }
   } else if (S.mode === 'ridge'){
     const n = S.ridges.length;
     const tot = ridgeTotalFt();
@@ -944,11 +1170,22 @@ function redraw(){
   const k = stage.width / S.anW;
 
   if (S.bar){
-    sctx.strokeStyle = '#d9a441'; sctx.lineWidth = 2;
+    sctx.strokeStyle = '#d9a441'; sctx.lineWidth = S.bar.manual ? 3 : 2;
     sctx.beginPath();
-    sctx.moveTo(S.bar.x1 * k, S.bar.y * k);
-    sctx.lineTo(S.bar.x2 * k, S.bar.y * k);
-    sctx.stroke();
+    if (S.bar.manual){
+      // a hand-drawn measure can run at any angle -- draw where he actually drew
+      sctx.moveTo(S.bar.ax1 * k, S.bar.ay1 * k);
+      sctx.lineTo(S.bar.ax2 * k, S.bar.ay2 * k);
+      sctx.stroke();
+      sctx.fillStyle = '#d9a441';
+      [[S.bar.ax1, S.bar.ay1], [S.bar.ax2, S.bar.ay2]].forEach(([x, y]) => {
+        sctx.beginPath(); sctx.arc(x * k, y * k, 4, 0, Math.PI * 2); sctx.fill();
+      });
+    } else {
+      sctx.moveTo(S.bar.x1 * k, S.bar.y * k);
+      sctx.lineTo(S.bar.x2 * k, S.bar.y * k);
+      sctx.stroke();
+    }
   }
 
   const segs = S.ridges.concat(S.draftSeg ? [S.draftSeg] : []);
@@ -1117,9 +1354,13 @@ stage.addEventListener('pointermove', e => {
   const p = anCoords(e);
   S.drag.x2 = p.x; S.drag.y2 = p.y;
   if (S.mode === 'scale'){
+    // True drag length, not the horizontal span -- he may measure along a
+    // diagonal (a roof edge, a driveway) rather than a horizontal scale bar.
+    const dx = S.drag.x2 - S.drag.x1, dy = S.drag.y2 - S.drag.y1;
     S.bar = { x1: Math.min(S.drag.x1, S.drag.x2), x2: Math.max(S.drag.x1, S.drag.x2),
-              y: Math.round((S.drag.y1 + S.drag.y2) / 2), len: 0 };
-    S.bar.len = Math.round(S.bar.x2 - S.bar.x1);
+              y: Math.round((S.drag.y1 + S.drag.y2) / 2),
+              ax1: S.drag.x1, ay1: S.drag.y1, ax2: S.drag.x2, ay2: S.drag.y2,
+              manual: true, len: Math.max(1, Math.round(Math.hypot(dx, dy))) };
   } else if (S.mode === 'ridge'){
     S.draftSeg = { x1: S.drag.x1, y1: S.drag.y1, x2: S.drag.x2, y2: S.drag.y2 };
   }
@@ -1132,6 +1373,10 @@ stage.addEventListener('pointerup', () => {
   if (S.mode === 'scale'){
     if (S.bar && S.bar.len < 12){ S.bar = detectScaleBar(); }
     refreshReadings();
+    if (S.bar && S.bar.manual){
+      const t = document.getElementById('typedVal');
+      t.focus(); t.select();
+    }
   } else if (S.mode === 'ridge'){
     if (S.draftSeg && segLenPx(S.draftSeg) >= 8){
       S.ridges.push(S.draftSeg);
