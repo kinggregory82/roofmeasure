@@ -319,11 +319,14 @@
     #stage{
       border: 2pt solid #000;
       filter: grayscale(1) contrast(1.25);
-      /* fill the frame edge to edge -- he'd rather use the space than keep the
-         screenshot's exact proportions; the numbers carry the measurements */
-      width: 100%;
+      /* Never stretch the aerial -- object-fit:fill squashed it flat. The frame
+         is the canvas border, so keeping the aspect makes the frame hug the
+         image: no interior white margins either way. Height is the slider,
+         width follows. */
+      width: auto;
       height: var(--aerialH);
-      object-fit: fill;
+      max-width: 100%;
+      object-fit: contain;
     }
     .canvas-wrap{ text-align: center; }
 
@@ -418,6 +421,10 @@
         <label class="szctl" title="How big the aerial is, on screen and on the sheet">Size
           <input type="range" id="aerialSize" min="2" max="5.5" step="0.1" value="3.8">
           <span id="aerialSizeVal">3.8"</span>
+        </label>
+        <label class="szctl" title="Sharpen and lift the contrast so the roof still reads after a laser printer flattens it to grey">Enhance
+          <input type="range" id="aerialEnh" min="0" max="100" step="5" value="40">
+          <span id="aerialEnhVal">40</span>
         </label>
         <button class="btn" id="undoBtn">Undo</button>
         <button class="btn" id="newImgBtn">New image</button>
@@ -725,6 +732,7 @@ function setImage(img){
   }
 
   S.ftPerPx = 0; S.bar = null; S.barCands = []; S.barIdx = 0;
+  S.enhanced = null; buildEnhanced();
   S.ridges = []; S.draftSeg = null; S.ridgeDone = false;
   S.marks = []; S.marksTouched = false; S.history = [];
 
@@ -746,7 +754,7 @@ function sizeStage(){
 window.addEventListener('resize', () => { if (S.img){ sizeStage(); redraw(); } });
 
 document.getElementById('newImgBtn').addEventListener('click', () => {
-  S.img = null; S.gray = null; S.bar = null; S.barCands = []; S.barIdx = 0;
+  S.img = null; S.gray = null; S.bar = null; S.barCands = []; S.barIdx = 0; S.enhanced = null;
   S.ridges = []; S.draftSeg = null; S.ridgeDone = false;
   S.marks = []; S.marksTouched = false; S.ftPerPx = 0; S.history = [];
   imgInput.value = '';
@@ -1045,7 +1053,7 @@ function drawManualCrop(){
   cropCv.width  = outW;
   cropCv.height = Math.max(60, Math.round(outW * (sh / sw)));
   cropCtx.imageSmoothingEnabled = true;
-  cropCtx.drawImage(S.img, x0, y0, sw, sh, 0, 0, cropCv.width, cropCv.height);
+  cropCtx.drawImage(baseImg(), x0, y0, sw, sh, 0, 0, cropCv.width, cropCv.height);
 
   const f = cropCv.width / sw;
   const px = x => (x * k - x0) * f, py = y => (y * k - y0) * f;
@@ -1076,7 +1084,7 @@ function drawBarCrop(){
   cropCv.width  = outW;
   cropCv.height = Math.max(40, Math.round(outW * (sh / sw)));
   cropCtx.imageSmoothingEnabled = false;
-  cropCtx.drawImage(S.img, sx, sy, sw, sh, 0, 0, cropCv.width, cropCv.height);
+  cropCtx.drawImage(baseImg(), sx, sy, sw, sh, 0, 0, cropCv.width, cropCv.height);
 
   // mark the ends the app measured between
   const f = cropCv.width / sw;
@@ -1163,10 +1171,96 @@ function syncRidgeInput(){
 
 function toStage(p){ const k = stage.width / S.anW; return { x: p.x * k, y: p.y * k }; }
 
+/* ============================ image enhancement ============================
+   A Maps/Earth aerial is low-contrast to start with, and a laser printer then
+   flattens it to grey -- shingle against shadow against asphalt all land in the
+   same muddy band and the roof stops reading. So bake an enhanced copy ONCE per
+   slider change and draw from that: a 3x3 unsharp mask to put the edges back,
+   then a contrast/brightness lift about the mid grey.
+
+   Baked into a canvas rather than applied as a CSS filter because the ridge
+   lines and stack marks are drawn on top and must NOT be sharpened or greyed,
+   and because a CSS filter would be at the mercy of the browser's
+   "background graphics" print setting.
+   ============================================================================ */
+function enhanceAmount(){
+  const el = document.getElementById('aerialEnh');
+  return el ? (+el.value || 0) / 100 : 0;
+}
+
+function buildEnhanced(){
+  S.enhanced = null;
+  if (!S.img) return;
+  const a = enhanceAmount();
+  if (a <= 0) return;
+
+  const W = S.img.width, H = S.img.height;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const cx = c.getContext('2d', { willReadFrequently: true });
+  cx.drawImage(S.img, 0, 0);
+
+  let src;
+  try { src = cx.getImageData(0, 0, W, H); }
+  catch (e) { return; }              // tainted canvas -- fall back to the original
+  const s = src.data;
+  const out = cx.createImageData(W, H);
+  const d = out.data;
+
+  const k = 1.1 * a;                 // unsharp strength
+  const con = 1 + 0.55 * a;          // contrast
+
+  // Pivot the contrast on the image's OWN average, not mid grey. An aerial of a
+  // wooded lot averages around 90, so stretching about 128 drags the whole frame
+  // darker and the roof goes muddy. Pivoting on its own mean holds the overall
+  // brightness and spends the extra range on separating shingle from shadow.
+  let sum = 0, cnt = 0;
+  for (let i = 0; i < s.length; i += 4 * 17){          // sparse sample is plenty
+    sum += s[i] * 0.299 + s[i+1] * 0.587 + s[i+2] * 0.114; cnt++;
+  }
+  const pivot = Math.max(60, Math.min(190, cnt ? sum / cnt : 128));
+
+  for (let y = 0; y < H; y++){
+    const yUp = y > 0 ? y - 1 : 0, yDn = y < H - 1 ? y + 1 : H - 1;
+    for (let x = 0; x < W; x++){
+      const xL = x > 0 ? x - 1 : 0, xR = x < W - 1 ? x + 1 : W - 1;
+      const i = (y*W + x) * 4;
+      for (let ch = 0; ch < 3; ch++){
+        const c0 = s[i + ch];
+        // 4-neighbour blur, then push the pixel away from it (unsharp)
+        const blur = (s[(yUp*W + x)*4 + ch] + s[(yDn*W + x)*4 + ch]
+                    + s[(y*W + xL)*4 + ch] + s[(y*W + xR)*4 + ch]) * 0.25;
+        let v = c0 + (c0 - blur) * k;
+        v = (v - pivot) * con + pivot;
+        d[i + ch] = v < 0 ? 0 : v > 255 ? 255 : v;
+      }
+      d[i + 3] = 255;
+    }
+  }
+  cx.putImageData(out, 0, 0);
+  S.enhanced = c;
+}
+
+// Everything that paints the aerial goes through this, so the enhanced copy and
+// the original stay interchangeable -- identical dimensions, so no coord changes.
+function baseImg(){ return S.enhanced || S.img; }
+
+let enhTimer = null;
+function bindEnhance(){
+  const el = document.getElementById('aerialEnh'), out = document.getElementById('aerialEnhVal');
+  const run = () => {
+    out.textContent = el.value;
+    clearTimeout(enhTimer);
+    enhTimer = setTimeout(() => { buildEnhanced(); redraw(); refreshReadings(); }, 140);
+  };
+  el.addEventListener('input', run);
+}
+bindEnhance();
+
 function redraw(){
   if (!S.img || !stage.width) return;
   sctx.clearRect(0, 0, stage.width, stage.height);
-  sctx.drawImage(S.img, 0, 0, stage.width, stage.height);
+  sctx.drawImage(baseImg(), 0, 0, stage.width, stage.height);
   const k = stage.width / S.anW;
 
   if (S.bar){
