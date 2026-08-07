@@ -1082,12 +1082,72 @@ async function mbGeocode(q, token){
 /* Google's static map maxes out at 640 logical px on the standard key, so it is
    asked for one zoom level shallower with half the logical width -- which lands
    on exactly the same ground footprint as the other two. */
+/* MICHIGAN IS A CACHED TILE SERVICE (its own metadata: "Single Fused Map Cache:
+   true", 256px tiles, LOD 1-19). The /export endpoint is the DYNAMIC path -- it
+   makes the server assemble and resample a fresh single image per request, one
+   at a time, with nothing cached in front of it. That is why it crawled.
+   Reading the tile cache instead means small pre-rendered files the browser
+   fetches in parallel, which is the path the service is actually built for.
+
+   Its finest level is LOD 19 at 0.2986 m/px, i.e. about a foot on the ground,
+   which matches the 12-inch statewide orthos. Zoom 20 and 21 have no tiles at
+   all -- those frames are LOD 19 enlarged, and the app says so. */
+const MI_LOD_MAX = 19;
+const MERC_ORG = 20037508.342787;
+const MI_TILE_CAP = 80;              // sanity bound on one frame's fetches
+
+function miTileUrl(z, x, y){ return MI_BASE + '/tile/' + z + '/' + y + '/' + x; }
+
+function loadTile(url){
+  return new Promise(function(res){
+    const im = new Image();
+    im.crossOrigin = 'anonymous';
+    im.onload  = function(){ res(im); };
+    im.onerror = function(){ res(null); };   // a hole in coverage is not a failure
+    im.src = url;
+  });
+}
+
+/* Build the frame by stitching the covering tiles onto a canvas. The result is
+   a canvas, not an Image -- everything downstream only uses width/height and
+   drawImage, so they are interchangeable. */
+async function loadMichigan(lat, lng, zoom){
+  const tz  = Math.min(zoom, MI_LOD_MAX);
+  const res = 156543.03392 / Math.pow(2, tz);       // mercator metres per tile px
+  const c   = mercXY(lat, lng), h = spanMercM(zoom) / 2;
+
+  // frame edges in this LOD's pixel grid
+  const px0 = (c.x - h + MERC_ORG) / res, px1 = (c.x + h + MERC_ORG) / res;
+  const py0 = (MERC_ORG - (c.y + h)) / res, py1 = (MERC_ORG - (c.y - h)) / res;
+
+  const tx0 = Math.floor(px0 / 256), tx1 = Math.floor((px1 - 1e-6) / 256);
+  const ty0 = Math.floor(py0 / 256), ty1 = Math.floor((py1 - 1e-6) / 256);
+  const n = (tx1 - tx0 + 1) * (ty1 - ty0 + 1);
+  if (n > MI_TILE_CAP) throw new Error('That view needs too many tiles \u2014 zoom in a step');
+
+  const cv = document.createElement('canvas');
+  cv.width = IMG_PX; cv.height = IMG_PX;
+  const ctx = cv.getContext('2d');
+  const k = IMG_PX / (px1 - px0);                   // frame px per tile px
+
+  const jobs = [];
+  let got = 0;
+  for (let ty = ty0; ty <= ty1; ty++)
+    for (let tx = tx0; tx <= tx1; tx++)
+      jobs.push(loadTile(miTileUrl(tz, tx, ty)).then(function(im){
+        if (!im) return;                 // hole in coverage -- leave it blank
+        got++;
+        ctx.drawImage(im, (tx * 256 - px0) * k, (ty * 256 - py0) * k, 256 * k, 256 * k);
+      }));
+
+  await Promise.all(jobs);
+  // Not one tile came back. Almost always means the server refused the
+  // cross-origin read, which would otherwise hand back a silent blank frame.
+  if (!got) throw new Error('Michigan tiles would not load \u2014 try Mapbox from the Imagery list');
+  return cv;
+}
+
 function srcUrl(src, lat, lng, zoom){
-  if (src === 'michigan'){
-    const c = mercXY(lat, lng), h = spanMercM(zoom) / 2;
-    return MI_BASE + '/export?bbox=' + [c.x - h, c.y - h, c.x + h, c.y + h].join(',')
-         + '&bboxSR=3857&imageSR=3857&size=' + IMG_PX + ',' + IMG_PX + '&format=jpg&f=image';
-  }
   if (src === 'google'){
     const k = ggKey();
     if (!k) throw new Error('Add a Google Maps key in the box below to use Google imagery');
@@ -1113,22 +1173,28 @@ function cacheKey(src, lat, lng, zoom){
   return src + '|' + zoom + '|' + lat.toFixed(6) + '|' + lng.toFixed(6);
 }
 
+function remember(key, img){
+  mapCache.set(key, img);
+  if (mapCache.size > MAP_CACHE_MAX) mapCache.delete(mapCache.keys().next().value);
+  return img;
+}
+
 function loadSatellite(lat, lng, zoom, src){
+  const ck = cacheKey(src, lat, lng, zoom);
+  const cached = mapCache.get(ck);
+  if (cached) return Promise.resolve(cached);
+  if (src === 'michigan'){
+    return loadMichigan(lat, lng, zoom).then(function(cv){ return remember(ck, cv); });
+  }
   return new Promise(function(resolve, reject){
-    const key = cacheKey(src, lat, lng, zoom);
-    const hit = mapCache.get(key);
-    if (hit){ resolve(hit); return; }
+    const key = ck;
     let url;
     try { url = srcUrl(src, lat, lng, zoom); } catch (e){ reject(e); return; }
     const img = new Image();
     // Without this the canvas is tainted and getImageData throws, which would
     // break both the grey buffer and the Enhance slider.
     img.crossOrigin = 'anonymous';
-    img.onload  = function(){
-      mapCache.set(key, img);
-      if (mapCache.size > MAP_CACHE_MAX) mapCache.delete(mapCache.keys().next().value);
-      resolve(img);
-    };
+    img.onload  = function(){ resolve(remember(key, img)); };
     img.onerror = function(){
       reject(new Error(src === 'mapbox' ? 'Mapbox would not return the image \u2014 check the token'
            : src === 'google' ? 'Google would not return the image \u2014 check the key and that Static Maps is switched on'
@@ -1276,10 +1342,20 @@ function panFromDrag(d){
           'Moved. Drag again, or hit 2. Ridges when the roof is framed.');
 }
 
+// Michigan's finest tiles are LOD 19 (about a foot per pixel). Past that the
+// picture is enlarged, not sharper -- worth saying rather than letting him
+// wonder why zoom 21 looks soft.
+function overZoomNote(src, z){
+  return (src === 'michigan' && z > MI_LOD_MAX)
+    ? ' Michigan detail stops at zoom ' + MI_LOD_MAX + ' \u2014 this is enlarged.' : '';
+}
+
 function reZoom(z){
   if (!S.mapMeta || z === S.mapMeta.zoom) return;
   refetch(S.mapMeta.lat, S.mapMeta.lng, z, S.mapMeta.src, 'Zooming\u2026',
-          S.mapMeta.label + ' \u2014 zoom ' + z + ', about ' + Math.round(spanFeet(S.mapMeta.lat, z)) + ' ft across.');
+          S.mapMeta.label + ' \u2014 zoom ' + z + ', about '
+          + Math.round(spanFeet(S.mapMeta.lat, z)) + ' ft across.'
+          + overZoomNote(S.mapMeta.src, z));
 }
 
 function reSource(src){
