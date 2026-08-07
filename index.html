@@ -1219,6 +1219,14 @@ function anToLatLng(p){
   return invMerc(c.x + (p.x - S.anW / 2) * mpp, c.y - (p.y - S.anH / 2) * mpp);
 }
 
+// lat/lng -> analysis-space point on the current map (inverse of anToLatLng)
+function latLngToAn(ll){
+  const m = S.mapMeta;
+  if (!m || !S.img || !ll) return null;
+  const c = mercXY(m.lat, m.lng), q = mercXY(ll.lat, ll.lng), mpp = m.spanM / S.anW;
+  return { x: S.anW / 2 + (q.x - c.x) / mpp, y: S.anH / 2 - (q.y - c.y) / mpp };
+}
+
 /* Moving, zooming or switching source replaces the picture, so anything already
    traced has to come with it: old analysis px -> mercator metres -> new
    analysis px. Works across a zoom change and across sources of different pixel
@@ -1379,13 +1387,18 @@ async function findRoof(){
     const m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
     if (m){ lat = +m[1]; lng = +m[2]; label = lat.toFixed(5) + ', ' + lng.toFixed(5); }
     else { const g = await mbGeocode(q, token); lat = g.lat; lng = g.lng; label = g.name; }
+    // The address point itself, kept so it can be marked on the picture. It
+    // stays put while he pans -- that is the whole use of it, since on a farm
+    // the address lands on a barn and he needs to see WHICH building it means.
+    S.pin = { lat: lat, lng: lng };
 
     const zoom = +document.getElementById('zoomIn').value;
     await showMap(lat, lng, zoom, label, false);
 
     calc();
     queuePrefetch();
-    addrNote(label + ' \u2014 frame the roof first: drag to move, tap to centre, zoom as needed.'
+    addrNote(label + ' \u2014 the marker is where that address lands. Frame the roof:'
+           + ' drag to move, tap to centre, zoom as needed.'
            + ' Then hit Use this view. Picture soft? Try another Imagery source.');
   } catch (e){
     addrNote(e.message || 'Lookup failed', true);
@@ -1477,6 +1490,7 @@ function setImage(img, opts){
   S.plans = []; S.curB = 0; renderBundleInputs();
   S.marks = []; S.marksTouched = false; S.history = [];
   S.mapMeta = null;
+  if (!opts.map) S.pin = null;        // an uploaded screenshot has no address point
   const mvBtn = document.getElementById('modeMove');
   if (mvBtn) mvBtn.style.display = 'none';
   const uvBtn = document.getElementById('useViewBtn');
@@ -1495,6 +1509,58 @@ function setImage(img, opts){
   calc();
 }
 
+/* A teardrop whose TIP is the address point, so there is no doubt which pixel
+   is meant. If the address sits outside the current frame -- which happens the
+   moment he pans away from it -- it becomes an arrow on the nearest edge with
+   the distance, rather than silently vanishing. */
+function drawPin(k){
+  const p = latLngToAn(S.pin);
+  if (!p) return;
+  const x = p.x * k, y = p.y * k, W = stage.width, H = stage.height;
+  const inside = x >= 0 && x <= W && y >= 0 && y <= H;
+
+  sctx.save();
+  sctx.lineJoin = 'round';
+  if (inside){
+    const r = Math.max(6, Math.min(11, W / 70)), cy = y - r * 2.1;
+    sctx.beginPath();
+    sctx.moveTo(x, y);
+    sctx.quadraticCurveTo(x - r * 1.25, cy + r * 0.6, x - r, cy);
+    sctx.arc(x, cy, r, Math.PI, 0);
+    sctx.quadraticCurveTo(x + r * 1.25, cy + r * 0.6, x, y);
+    sctx.closePath();
+    sctx.fillStyle = '#c1553d';
+    sctx.strokeStyle = '#fff'; sctx.lineWidth = 2;
+    sctx.fill(); sctx.stroke();
+    sctx.beginPath(); sctx.arc(x, cy, r * 0.36, 0, Math.PI * 2);
+    sctx.fillStyle = '#fff'; sctx.fill();
+  } else {
+    const cx = W / 2, cy = H / 2;
+    const ex = Math.max(22, Math.min(W - 22, x)), ey = Math.max(22, Math.min(H - 22, y));
+    const a = Math.atan2(y - cy, x - cx), sz = 11;
+    sctx.translate(ex, ey); sctx.rotate(a);
+    sctx.beginPath();
+    sctx.moveTo(sz, 0); sctx.lineTo(-sz * 0.8, sz * 0.75); sctx.lineTo(-sz * 0.8, -sz * 0.75);
+    sctx.closePath();
+    sctx.fillStyle = '#c1553d'; sctx.strokeStyle = '#fff'; sctx.lineWidth = 2;
+    sctx.fill(); sctx.stroke();
+    sctx.restore(); sctx.save();
+    if (S.ftPerPx){
+      const ft = Math.round(Math.hypot(p.x - S.anW / 2, p.y - S.anH / 2) * S.ftPerPx);
+      const t = 'address ' + ft + ' ft';
+      sctx.font = '600 12px system-ui, sans-serif';
+      const tw = sctx.measureText(t).width;
+      const tx = Math.max(4, Math.min(W - tw - 12, ex - tw / 2 - 4)),
+            ty = Math.max(2, Math.min(H - 20, ey + 14));
+      sctx.fillStyle = 'rgba(0,0,0,0.62)';
+      sctx.fillRect(tx, ty, tw + 8, 17);
+      sctx.fillStyle = '#fff';
+      sctx.fillText(t, tx + 4, ty + 12.5);
+    }
+  }
+  sctx.restore();
+}
+
 function sizeStage(){
   const w = workArea.clientWidth;
   stage.width  = Math.round(w);
@@ -1506,7 +1572,7 @@ document.getElementById('newImgBtn').addEventListener('click', () => {
   S.img = null; S.gray = null; S.bar = null; S.barCands = []; S.barIdx = 0; S.enhanced = null;
   S.ridges = []; S.draftSeg = null; S.ridgeDone = false;
   S.marks = []; S.marksTouched = false; S.ftPerPx = 0; S.history = [];
-  S.mapMeta = null;
+  S.mapMeta = null; S.pin = null;
   document.getElementById('modeMove').style.display = 'none';
   document.getElementById('useViewBtn').style.display = 'none';
   imgInput.value = '';
@@ -1959,6 +2025,7 @@ function updateHint(){
     hintEl.innerHTML = S.busy
       ? `<b>Fetching the picture\u2026</b> hold on \u2014 the canvas is locked until it lands.`
       : `<b>Drag the picture</b> to move the map, or <b>tap a spot</b> to centre on it.`
+        + (S.pin ? `<br>The <b>red marker</b> is where the address lands \u2014 check it is on the right building.` : '')
         + `<br>Zoom and Imagery are up top. Each change fetches a new picture, so give it a beat.`
         + `<br>When the roof is framed the way you want it, hit <b>Use this view</b> to start tracing.`;
   } else if (S.mode === 'ridge'){
@@ -2174,6 +2241,11 @@ function redraw(){
       sctx.stroke();
     }
   }
+
+  // The address marker, only while framing. It is a check on WHICH building
+  // the address means, not something the driver needs, so it is gone by the
+  // time the sheet prints.
+  if (S.mode === 'move' && S.pin && S.mapMeta) drawPin(k);
 
   const segs = S.ridges.concat(S.draftSeg ? [S.draftSeg] : []);
   const segsPx = segs.map(sg => ({ x1: sg.x1*k, y1: sg.y1*k, x2: sg.x2*k, y2: sg.y2*k }));
