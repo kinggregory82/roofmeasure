@@ -546,8 +546,8 @@
       <div class="lookup-row lookup-zoom">
         <label for="srcIn">Imagery</label>
         <select id="srcIn">
+          <option value="michigan" selected>Michigan state</option>
           <option value="mapbox">Mapbox</option>
-          <option value="michigan">Michigan state</option>
           <option value="google">Google (needs key)</option>
         </select>
         <span class="lookup-span">switch to compare &mdash; same view either way</span>
@@ -565,8 +565,9 @@
         <div class="typednote">Stored in this browser only. Restrict it to your own site
           in your Mapbox account.</div>
         <input id="ggIn" type="text" placeholder="Google Maps Static API key (only if using Google imagery)" autocomplete="off" spellcheck="false">
-        <div class="typednote">Google needs a card on file even inside the free tier.
-          Michigan state imagery needs nothing at all &mdash; try that first.</div>
+        <div class="typednote">Michigan state imagery is the default and needs no key.
+          The Mapbox token above is still used to look the address up. Google needs a
+          card on file even inside the free tier.</div>
       </details>
     </div>
 
@@ -1033,7 +1034,9 @@ function mbToken(){ try { return localStorage.getItem('bccMapboxToken') || MB_DE
 function setMbToken(v){ try { localStorage.setItem('bccMapboxToken', v.trim()); } catch(e){} }
 function ggKey(){ try { return (localStorage.getItem('bccGoogleKey') || '').trim(); } catch(e){ return ''; } }
 function setGgKey(v){ try { localStorage.setItem('bccGoogleKey', v.trim()); } catch(e){} }
-function curSrc(){ const el = document.getElementById('srcIn'); return el ? el.value : 'mapbox'; }
+// Michigan state imagery is the default -- 12-inch statewide orthos beat
+// Mapbox's half-metre rural coverage, and BCC only works in Michigan.
+function curSrc(){ const el = document.getElementById('srcIn'); return el ? el.value : 'michigan'; }
 
 // Frame width in mercator metres -- source-independent by construction.
 function spanMercM(zoom){ return 156543.03392 / Math.pow(2, zoom) * MB_SIZE; }
