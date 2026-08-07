@@ -548,8 +548,8 @@
       </div>
       <div class="typednote" id="addrNote"></div>
       <details class="tokbox">
-        <summary>Mapbox token</summary>
-        <input id="tokIn" type="text" placeholder="pk.…" autocomplete="off" spellcheck="false">
+        <summary>Mapbox token (already set)</summary>
+        <input id="tokIn" type="text" placeholder="pk.… (leave alone unless changing accounts)" autocomplete="off" spellcheck="false">
         <div class="typednote">Stored in this browser only. Restrict it to your own site
           in your Mapbox account.</div>
       </details>
@@ -994,7 +994,11 @@ function loadFile(file){
 const MB_SIZE = 1280;          // @2x maximum for the Static Images API
 const MB_STYLE = 'satellite-v9';
 
-function mbToken(){ try { return localStorage.getItem('bccMapboxToken') || ''; } catch(e){ return ''; } }
+// Same public token the sales view already ships with -- it is on a public
+// page either way, so this adds no exposure. A token he types in the box
+// overrides it.
+const MB_DEFAULT_TOKEN = 'pk.eyJ1IjoiYmVuc2dyZWF0b3V0ZG9vcnMiLCJhIjoiY21wbzBqdmh4MDB6ZjJybzhjNnhrdHphdyJ9.ppB9r_WJZwwT6u0lSO0xpw';
+function mbToken(){ try { return localStorage.getItem('bccMapboxToken') || MB_DEFAULT_TOKEN; } catch(e){ return MB_DEFAULT_TOKEN; } }
 function setMbToken(v){ try { localStorage.setItem('bccMapboxToken', v.trim()); } catch(e){} }
 
 // Ground feet per NATIVE image pixel.
