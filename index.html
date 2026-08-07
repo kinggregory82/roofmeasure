@@ -562,6 +562,7 @@
 
     <div id="workArea" style="display:none;">
       <div class="steps">
+        <button class="btn" id="modeMove" style="display:none">Move map</button>
         <button class="btn" id="modeScale">1. Scale bar</button>
         <button class="btn" id="modeRidge">2. Ridges</button>
         <button class="btn" id="newBldgBtn" title="Start another roof — its ridges, bundles and pitch stay separate">+ Structure</button>
@@ -1047,6 +1048,127 @@ function loadSatellite(lat, lng, zoom, token){
   });
 }
 
+/* ── MOVING THE MAP ────────────────────────────────────────────────────────
+   The geocoder returns the ADDRESS point, which on a farm or an odd-shaped lot
+   lands on a barn or the driveway entrance rather than the house -- so the roof
+   he wants can sit outside the frame entirely. Panning is exact arithmetic in
+   the same Web Mercator grid the scale comes from: at zoom z the whole world is
+   512 * 2^z image pixels wide (512 because the request is @2x), so a pixel
+   offset from the centre converts straight back to a lat/lng.  */
+const MB_WPX = 512;
+function wxOf(lng, z){ return (lng + 180) / 360 * MB_WPX * Math.pow(2, z); }
+function wyOf(lat, z){
+  const sn = Math.sin(lat * Math.PI / 180);
+  return (0.5 - Math.log((1 + sn) / (1 - sn)) / (4 * Math.PI)) * MB_WPX * Math.pow(2, z);
+}
+function lngOfW(x, z){ return x / (MB_WPX * Math.pow(2, z)) * 360 - 180; }
+function latOfW(y, z){
+  const n = Math.PI - 2 * Math.PI * y / (MB_WPX * Math.pow(2, z));
+  return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+}
+
+// analysis-space point on the current map -> lat/lng
+function anToLatLng(p){
+  const m = S.mapMeta;
+  if (!m || !S.img) return null;
+  const k = S.img.width / S.anW;                       // native px per analysis px
+  const X = wxOf(m.lng, m.zoom) + (p.x * k - S.img.width  / 2);
+  const Y = wyOf(m.lat, m.zoom) + (p.y * k - S.img.height / 2);
+  return { lat: latOfW(Y, m.zoom), lng: lngOfW(X, m.zoom) };
+}
+
+/* Moving or zooming replaces the picture, so anything already traced has to
+   come with it. Old analysis px -> world px -> new analysis px; the zoom ratio
+   handles a zoom change and is 1 for a plain pan. */
+function makeRemap(from, fromImg, fromAnW, to, toImg, toAnW){
+  const fk = fromImg.w / fromAnW, tk = toImg.w / toAnW;
+  const sc = Math.pow(2, to.zoom - from.zoom);
+  const fcx = wxOf(from.lng, from.zoom), fcy = wyOf(from.lat, from.zoom);
+  const tcx = wxOf(to.lng,   to.zoom),   tcy = wyOf(to.lat,   to.zoom);
+  return function(p){
+    const X = (fcx + (p.x * fk - fromImg.w / 2)) * sc;
+    const Y = (fcy + (p.y * fk - fromImg.h / 2)) * sc;
+    return { x: (X - tcx + toImg.w / 2) / tk, y: (Y - tcy + toImg.h / 2) / tk };
+  };
+}
+
+// Fetch and show a map centred anywhere. keepGeom carries traced ridges,
+// marks and the structure inputs across the swap.
+async function showMap(lat, lng, zoom, label, keepGeom){
+  const prev = (keepGeom && S.mapMeta && S.img) ? {
+    meta: S.mapMeta,
+    img:  { w: S.img.width, h: S.img.height },
+    anW:  S.anW,
+    ridges: S.ridges.map(sg => ({ ...sg })),
+    marks:  S.marks.map(m => ({ ...m })),
+    bldgs:  S.bldgs.map(b => ({ ...b })),
+    curB: S.curB, ridgeDone: S.ridgeDone, marksTouched: S.marksTouched
+  } : null;
+
+  const img = await loadSatellite(lat, lng, zoom, mbToken());
+  setImage(img);
+
+  // Scale comes from the projection, not from a bar in the picture. ftPerPx
+  // is in ANALYSIS pixels, so convert if setImage downscaled the buffer.
+  S.ftPerPx = ftPerPxAt(lat, zoom, true) * (img.width / S.anW);
+  S.bar = null; S.barCands = []; S.barIdx = 0;
+  S.mapMeta = { lat: lat, lng: lng, zoom: zoom,
+                label: label || (prev ? prev.meta.label : '') };
+  const mv = document.getElementById('modeMove');
+  if (mv) mv.style.display = '';
+  const zi = document.getElementById('zoomIn');
+  if (zi && +zi.value !== zoom){ zi.value = zoom; updateSpanNote(); }
+
+  if (prev){
+    const R = makeRemap(prev.meta, prev.img, prev.anW,
+                        S.mapMeta, { w: img.width, h: img.height }, S.anW);
+    S.ridges = prev.ridges.map(sg => {
+      const a = R({ x: sg.x1, y: sg.y1 }), b = R({ x: sg.x2, y: sg.y2 });
+      return { ...sg, x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+    });
+    S.marks = prev.marks.map(m => { const q = R(m); return { ...m, x: q.x, y: q.y }; });
+    S.bldgs = prev.bldgs; S.curB = prev.curB;
+    S.ridgeDone = prev.ridgeDone; S.marksTouched = prev.marksTouched;
+    renderBundleInputs();
+    if (S.ftPerPx) syncRidgeInput();
+  }
+  return img;
+}
+
+async function moveMapTo(p, note){
+  const c = anToLatLng(p);
+  if (!c) return;
+  addrNote('Moving\u2026');
+  try {
+    await showMap(c.lat, c.lng, S.mapMeta.zoom, null, true);
+    setMode('move'); calc();
+    addrNote(note || 'Moved. Drag again, or hit 2. Ridges when the roof is framed.');
+  } catch (e){
+    addrNote(e.message || 'Move failed', true); redraw();
+  }
+}
+
+function panFromDrag(d){
+  if (!S.mapMeta) return;
+  const dx = d.x2 - d.x1, dy = d.y2 - d.y1;
+  // a real drag brings the grabbed point along; a tap just centres on it
+  const p = Math.hypot(dx, dy) >= 6 ? { x: S.anW / 2 - dx, y: S.anH / 2 - dy }
+                                    : { x: d.x2, y: d.y2 };
+  moveMapTo(p);
+}
+
+async function reZoom(z){
+  if (!S.mapMeta || z === S.mapMeta.zoom) return;
+  addrNote('Zooming\u2026');
+  try {
+    await showMap(S.mapMeta.lat, S.mapMeta.lng, z, null, true);
+    setMode(S.mode === 'move' ? 'move' : 'ridge'); calc();
+    addrNote(S.mapMeta.label + ' \u2014 zoom ' + z + '. Drag the picture to move it.');
+  } catch (e){
+    addrNote(e.message || 'Zoom failed', true);
+  }
+}
+
 async function findRoof(){
   const q = document.getElementById('addrIn').value.trim();
   const token = mbToken();
@@ -1062,19 +1184,12 @@ async function findRoof(){
     else { const g = await mbGeocode(q, token); lat = g.lat; lng = g.lng; label = g.name; }
 
     const zoom = +document.getElementById('zoomIn').value;
-    const img = await loadSatellite(lat, lng, zoom, token);
-    setImage(img);
-
-    // Scale comes from the projection, not from a bar in the picture. ftPerPx
-    // is in ANALYSIS pixels, so convert if setImage downscaled the buffer.
-    const native = ftPerPxAt(lat, zoom, true);
-    S.ftPerPx = native * (img.width / S.anW);
-    S.bar = null; S.barCands = []; S.barIdx = 0;
-    S.mapMeta = { lat: lat, lng: lng, zoom: zoom, label: label };
+    await showMap(lat, lng, zoom, label, false);
 
     setMode('ridge');
     calc();
-    addrNote(label + ' \u2014 scale set from the map, no bar needed. Drag along each ridge.');
+    addrNote(label + ' \u2014 scale set from the map, no bar needed. Drag along each ridge.'
+           + ' Wrong building? Hit Move map.');
   } catch (e){
     addrNote(e.message || 'Lookup failed', true);
   } finally {
@@ -1090,6 +1205,8 @@ async function findRoof(){
   tok.value = mbToken();
   tok.addEventListener('change', function(){ setMbToken(tok.value); addrNote(''); });
   zoom.addEventListener('input', updateSpanNote);
+  // once a map is up, the slider moves that map instead of just previewing
+  zoom.addEventListener('change', function(){ reZoom(+zoom.value); });
   addr.addEventListener('keydown', function(e){ if (e.key === 'Enter'){ e.preventDefault(); findRoof(); } });
   document.getElementById('findBtn').addEventListener('click', findRoof);
   updateSpanNote();
@@ -1148,6 +1265,9 @@ function setImage(img){
                              pitch:   (S.bldgs[0] || DEFAULTS).pitch }];
   S.plans = []; S.curB = 0; renderBundleInputs();
   S.marks = []; S.marksTouched = false; S.history = [];
+  S.mapMeta = null;
+  const mvBtn = document.getElementById('modeMove');
+  if (mvBtn) mvBtn.style.display = 'none';
 
   uploadArea.style.display = 'none';
   workArea.style.display = 'block';
@@ -1170,6 +1290,8 @@ document.getElementById('newImgBtn').addEventListener('click', () => {
   S.img = null; S.gray = null; S.bar = null; S.barCands = []; S.barIdx = 0; S.enhanced = null;
   S.ridges = []; S.draftSeg = null; S.ridgeDone = false;
   S.marks = []; S.marksTouched = false; S.ftPerPx = 0; S.history = [];
+  S.mapMeta = null;
+  document.getElementById('modeMove').style.display = 'none';
   imgInput.value = '';
   workArea.style.display = 'none';
   uploadArea.style.display = 'block';
@@ -1579,13 +1701,14 @@ function drawBarCrop(){
 }
 
 /* ============================ modes + drawing ============================ */
-const MODE_BTN = { scale:'modeScale', ridge:'modeRidge', marks:'modeMarks' };
+const MODE_BTN = { move:'modeMove', scale:'modeScale', ridge:'modeRidge', marks:'modeMarks' };
 Object.keys(MODE_BTN).forEach(m =>
   document.getElementById(MODE_BTN[m]).addEventListener('click', () => setMode(m))
 );
 
 function setMode(m){
   S.mode = m;
+  stage.style.cursor = (m === 'move') ? 'move' : '';
   Object.keys(MODE_BTN).forEach(k =>
     document.getElementById(MODE_BTN[k]).classList.toggle('on', k === m)
   );
@@ -1608,6 +1731,11 @@ function updateHint(){
     } else {
       hintEl.innerHTML = `<b>Drag along the scale bar</b> on the image — or along anything you know the length of — then type the distance.`;
     }
+  } else if (S.mode === 'move'){
+    hintEl.innerHTML =
+      `<b>Drag the picture</b> to move the map, or <b>tap a spot</b> to centre on it.`
+      + `<br>Use the <b>Zoom</b> slider up top to pull back, find the right building, then tap it.`
+      + `<br>Scale re-sets itself every time, and anything already traced moves with the picture.`;
   } else if (S.mode === 'ridge'){
     const n = S.ridges.length;
     const tot = ridgeTotalFt();
@@ -1777,6 +1905,14 @@ bindEnhance();
 function redraw(){
   if (!S.img || !stage.width) return;
   sctx.clearRect(0, 0, stage.width, stage.height);
+  if (S.mode === 'move' && S.drag){
+    // live feedback while panning -- overlays are hidden because they are about
+    // to be re-projected onto the new frame anyway
+    const kk = stage.width / S.anW;
+    sctx.drawImage(baseImg(), (S.drag.x2 - S.drag.x1) * kk, (S.drag.y2 - S.drag.y1) * kk,
+                   stage.width, stage.height);
+    return;
+  }
   sctx.drawImage(baseImg(), 0, 0, stage.width, stage.height);
   const k = stage.width / S.anW;
 
@@ -1982,6 +2118,7 @@ stage.addEventListener('pointermove', e => {
 
 stage.addEventListener('pointerup', () => {
   if (!S.drag) return;
+  if (S.mode === 'move'){ const d = S.drag; S.drag = null; panFromDrag(d); return; }
   S.drag = null;
   if (S.mode === 'scale'){
     if (S.bar && S.bar.len < 12){ S.bar = findBar(); }
