@@ -354,12 +354,23 @@
     :root{ --steel: #cc0000; }
     .btn.on{ background: rgba(204,0,0,0.14); }
 
+    .lookup{ margin-bottom: 14px; }
+    .lookup-row{ display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .lookup-row input[type=text]{ flex: 1; min-width: 0; }
+    .lookup-zoom label{ margin: 0; white-space: nowrap; }
+    .lookup-zoom input[type=range]{ flex: 1; accent-color: var(--steel); }
+    #zoomOut{ font-family: 'JetBrains Mono', monospace; min-width: 2ch; text-align: right; }
+    .lookup-span{ color: var(--ink-dim); font-size: 0.8rem; white-space: nowrap; }
+    .tokbox summary{ cursor: pointer; color: var(--ink-dim); font-size: 0.8rem;
+      font-family: var(--prose); }
+    .tokbox input{ margin-top: 8px; }
     .brandmark{ height: 42px; width: auto; display: block; }
     .brandmark.print-only{ display: none; }
     header{ align-items: center; }
   }
 
   @media print{
+    .lookup{ display: none !important; }
     .brandmark.screen-only{ display: none !important; }
     .brandmark.print-only{ display: block !important; height: 0.42in; width: auto;
       margin: 0 0 4px; }
@@ -523,6 +534,27 @@
     </div>
 
     <input type="file" id="imgInput" accept="image/*">
+    <div class="lookup" id="lookup">
+      <div class="lookup-row">
+        <input id="addrIn" type="text" placeholder="Job address or lat, lng"
+               autocomplete="off" spellcheck="false">
+        <button class="btn" id="findBtn">Find roof</button>
+      </div>
+      <div class="lookup-row lookup-zoom">
+        <label for="zoomIn">Zoom</label>
+        <input id="zoomIn" type="range" min="17" max="21" step="1" value="20">
+        <span id="zoomOut">20</span>
+        <span class="lookup-span" id="spanOut"></span>
+      </div>
+      <div class="typednote" id="addrNote"></div>
+      <details class="tokbox">
+        <summary>Mapbox token</summary>
+        <input id="tokIn" type="text" placeholder="pk.…" autocomplete="off" spellcheck="false">
+        <div class="typednote">Stored in this browser only. Restrict it to your own site
+          in your Mapbox account.</div>
+      </details>
+    </div>
+
     <div class="upload-area" id="uploadArea">
       Tap to upload the aerial &mdash; or paste a screenshot (Ctrl+V)<br>
       <span style="opacity:0.7">Straight-down 2D view, with Google's scale bar in frame</span>
@@ -952,6 +984,112 @@ function loadFile(file){
   };
   r.readAsDataURL(file);
 }
+
+// ── SATELLITE LOOKUP (Mapbox) ─────────────────────────────────────────────
+// The scale bar only ever existed because the image came from a screenshot.
+// When the page requests the imagery itself it knows the projection, so ground
+// distance is arithmetic and there is nothing to detect: at zoom z and latitude
+// lat, one tile pixel covers 156543.03392 * cos(lat) / 2^z metres. The @2x
+// request halves that again. No bar, no eleven readings, no manual drag.
+const MB_SIZE = 1280;          // @2x maximum for the Static Images API
+const MB_STYLE = 'satellite-v9';
+
+function mbToken(){ try { return localStorage.getItem('bccMapboxToken') || ''; } catch(e){ return ''; } }
+function setMbToken(v){ try { localStorage.setItem('bccMapboxToken', v.trim()); } catch(e){} }
+
+// Ground feet per NATIVE image pixel.
+function ftPerPxAt(lat, zoom, retina){
+  const mPerPx = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, zoom) / (retina ? 2 : 1);
+  return mPerPx * 3.280839895;
+}
+
+function addrNote(msg, bad){
+  const el = document.getElementById('addrNote');
+  if (el){ el.textContent = msg || ''; el.style.color = bad ? 'var(--red)' : ''; }
+}
+
+function updateSpanNote(){
+  const z = +document.getElementById('zoomIn').value;
+  document.getElementById('zoomOut').textContent = z;
+  // Latitude 43 is mid-Michigan; close enough to preview the frame width.
+  const ft = ftPerPxAt(43.4, z, true) * MB_SIZE;
+  document.getElementById('spanOut').textContent = '\u2248 ' + Math.round(ft) + ' ft across';
+}
+
+async function mbGeocode(q, token){
+  const url = 'https://api.mapbox.com/search/geocode/v6/forward?q=' + encodeURIComponent(q)
+            + '&limit=1&country=us&access_token=' + encodeURIComponent(token);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(r.status === 401 ? 'Mapbox rejected the token' : 'Lookup failed (' + r.status + ')');
+  const j = await r.json();
+  const f = (j.features || [])[0];
+  if (!f) throw new Error('No match for that address');
+  const c = f.geometry.coordinates;              // [lng, lat]
+  return { lng: c[0], lat: c[1], name: (f.properties && f.properties.full_address) || q };
+}
+
+function loadSatellite(lat, lng, zoom, token){
+  return new Promise(function(resolve, reject){
+    const url = 'https://api.mapbox.com/styles/v1/mapbox/' + MB_STYLE + '/static/'
+              + lng + ',' + lat + ',' + zoom + ',0/' + MB_SIZE + 'x' + MB_SIZE + '@2x'
+              + '?access_token=' + encodeURIComponent(token) + '&attribution=false&logo=false';
+    const img = new Image();
+    // Without this the canvas is tainted and getImageData throws, which would
+    // break both the grey buffer and the Enhance slider.
+    img.crossOrigin = 'anonymous';
+    img.onload  = function(){ resolve(img); };
+    img.onerror = function(){ reject(new Error('Mapbox would not return the image \u2014 check the token')); };
+    img.src = url;
+  });
+}
+
+async function findRoof(){
+  const q = document.getElementById('addrIn').value.trim();
+  const token = mbToken();
+  if (!token){ addrNote('Add your Mapbox token below first.', true); return; }
+  if (!q){ addrNote('Type an address, or a lat, lng pair.', true); return; }
+
+  const btn = document.getElementById('findBtn');
+  btn.disabled = true; addrNote('Looking\u2026');
+  try {
+    let lat, lng, label;
+    const m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+    if (m){ lat = +m[1]; lng = +m[2]; label = lat.toFixed(5) + ', ' + lng.toFixed(5); }
+    else { const g = await mbGeocode(q, token); lat = g.lat; lng = g.lng; label = g.name; }
+
+    const zoom = +document.getElementById('zoomIn').value;
+    const img = await loadSatellite(lat, lng, zoom, token);
+    setImage(img);
+
+    // Scale comes from the projection, not from a bar in the picture. ftPerPx
+    // is in ANALYSIS pixels, so convert if setImage downscaled the buffer.
+    const native = ftPerPxAt(lat, zoom, true);
+    S.ftPerPx = native * (img.width / S.anW);
+    S.bar = null; S.barCands = []; S.barIdx = 0;
+    S.mapMeta = { lat: lat, lng: lng, zoom: zoom, label: label };
+
+    setMode('ridge');
+    calc();
+    addrNote(label + ' \u2014 scale set from the map, no bar needed. Drag along each ridge.');
+  } catch (e){
+    addrNote(e.message || 'Lookup failed', true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+(function wireLookup(){
+  const tok = document.getElementById('tokIn');
+  const addr = document.getElementById('addrIn');
+  const zoom = document.getElementById('zoomIn');
+  if (!tok) return;
+  tok.value = mbToken();
+  tok.addEventListener('change', function(){ setMbToken(tok.value); addrNote(''); });
+  zoom.addEventListener('input', updateSpanNote);
+  addr.addEventListener('keydown', function(e){ if (e.key === 'Enter'){ e.preventDefault(); findRoof(); } });
+  document.getElementById('findBtn').addEventListener('click', findRoof);
+  updateSpanNote();
+})();
 
 function setImage(img){
   S.img = img;
