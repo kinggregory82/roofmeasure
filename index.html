@@ -85,6 +85,7 @@
   .btn:active{ background: rgba(91,139,176,0.12); }
   .btn.on{ border-color: var(--steel); color: var(--ink); background: rgba(91,139,176,0.14); }
   .btn.ready{ border-color: var(--ink-dim); color: var(--ink); }
+  #useViewBtn.ready{ border-color: var(--steel); color: var(--ink); font-weight: 600; }
   .btn:disabled{ opacity: 0.35; cursor: default; }
 
   .upload-area{
@@ -577,6 +578,7 @@
     <div id="workArea" style="display:none;">
       <div class="steps">
         <button class="btn" id="modeMove" style="display:none">Move map</button>
+        <button class="btn" id="useViewBtn" style="display:none">Use this view</button>
         <button class="btn" id="modeScale">1. Scale bar</button>
         <button class="btn" id="modeRidge">2. Ridges</button>
         <button class="btn" id="newBldgBtn" title="Start another roof — its ridges, bundles and pitch stay separate">+ Structure</button>
@@ -1018,6 +1020,7 @@ function loadFile(file){
 // 50 cm data and it looks like mush. No Mapbox setting fixes that; only a
 // different picture does.
 const MB_SIZE = 1280;          // canonical logical frame width, all sources
+const IMG_PX  = 1280;          // pixels actually requested -- see srcUrl()
 const MB_STYLE = 'satellite-v9';
 
 // Same public token the sales view already ships with -- it is on a public
@@ -1080,7 +1083,7 @@ function srcUrl(src, lat, lng, zoom){
   if (src === 'michigan'){
     const c = mercXY(lat, lng), h = spanMercM(zoom) / 2;
     return MI_BASE + '/export?bbox=' + [c.x - h, c.y - h, c.x + h, c.y + h].join(',')
-         + '&bboxSR=3857&imageSR=3857&size=2048,2048&format=jpg&f=image';
+         + '&bboxSR=3857&imageSR=3857&size=' + IMG_PX + ',' + IMG_PX + '&format=jpg&f=image';
   }
   if (src === 'google'){
     const k = ggKey();
@@ -1089,8 +1092,12 @@ function srcUrl(src, lat, lng, zoom){
          + '&zoom=' + (zoom - 1) + '&size=640x640&scale=2&maptype=satellite&format=jpg'
          + '&key=' + encodeURIComponent(k);
   }
+  // NOT @2x. That returned 2560 px for the same ground, and the analysis buffer
+  // caps at 1500 anyway -- so three quarters of every byte downloaded and
+  // decoded was thrown away on the downscale. Same footprint, quarter the
+  // pixels, and the source imagery is half-metre out here regardless.
   return 'https://api.mapbox.com/styles/v1/mapbox/' + MB_STYLE + '/static/'
-       + lng + ',' + lat + ',' + zoom + ',0/' + MB_SIZE + 'x' + MB_SIZE + '@2x'
+       + lng + ',' + lat + ',' + zoom + ',0/' + MB_SIZE + 'x' + MB_SIZE
        + '?access_token=' + encodeURIComponent(mbToken()) + '&attribution=false&logo=false';
 }
 
@@ -1171,6 +1178,7 @@ async function showMap(lat, lng, zoom, label, keepGeom, src){
 
   const img = await loadSatellite(lat, lng, zoom, src);
   setImage(img, { map: true });
+  if (S.busy) setBusy(true);          // re-assert the cursor after setMode
 
   S.mapMeta = { lat: lat, lng: lng, zoom: zoom, src: src,
                 spanM:  spanMercM(zoom),
@@ -1184,6 +1192,8 @@ async function showMap(lat, lng, zoom, label, keepGeom, src){
 
   const mv = document.getElementById('modeMove');
   if (mv) mv.style.display = '';
+  const uv = document.getElementById('useViewBtn');
+  if (uv) uv.style.display = '';
   const zi = document.getElementById('zoomIn');
   if (zi && +zi.value !== zoom){ zi.value = zoom; }
   const si = document.getElementById('srcIn');
@@ -1206,18 +1216,49 @@ async function showMap(lat, lng, zoom, label, keepGeom, src){
 }
 
 // One path for every "same place, different frame" request: pan, zoom, source.
+/* Fetching is not instant, so the app says so and stops accepting input while
+   it happens. Without the lock a drag started during the wait landed on the OLD
+   frame and then got re-projected onto the new one, which is what made moving
+   feel unpredictable. */
+function setBusy(on){
+  S.busy = !!on;
+  stage.style.cursor = on ? 'progress' : (S.mode === 'move' ? 'move' : '');
+  ['findBtn', 'zoomIn', 'srcIn', 'useViewBtn'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.disabled = !!on;
+  });
+}
+
 async function refetch(lat, lng, zoom, src, working, done){
-  if (!S.mapMeta) return;
-  addrNote(working);
+  if (!S.mapMeta || S.busy) return;
+  setBusy(true); addrNote(working);
   try {
     await showMap(lat, lng, zoom, null, true, src);
-    setMode(S.mode === 'move' ? 'move' : 'ridge');
     calc();
     addrNote(done);
+    queuePrefetch();
   } catch (e){
     addrNote(e.message || 'That did not load', true);
     redraw();
+  } finally {
+    setBusy(false);
   }
+}
+
+/* One zoom step either side of wherever he stops, fetched quietly once the
+   screen has settled. Zooming in and out to find a building is the slowest
+   thing in the workflow and it is almost always +-1, so this makes the common
+   case come out of cache. */
+let prefetchTimer = null;
+function queuePrefetch(){
+  clearTimeout(prefetchTimer);
+  prefetchTimer = setTimeout(function(){
+    const m = S.mapMeta;
+    if (!m) return;
+    [m.zoom - 1, m.zoom + 1].forEach(function(z){
+      if (z < 17 || z > 21) return;
+      loadSatellite(m.lat, m.lng, z, m.src).catch(function(){});
+    });
+  }, 700);
 }
 
 function panFromDrag(d){
@@ -1253,7 +1294,7 @@ async function findRoof(){
   if (!q){ addrNote('Type an address, or a lat, lng pair.', true); return; }
 
   const btn = document.getElementById('findBtn');
-  btn.disabled = true; addrNote('Looking\u2026');
+  setBusy(true); btn.disabled = true; addrNote('Looking\u2026');
   try {
     let lat, lng, label;
     const m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
@@ -1263,14 +1304,14 @@ async function findRoof(){
     const zoom = +document.getElementById('zoomIn').value;
     await showMap(lat, lng, zoom, label, false);
 
-    setMode('ridge');
     calc();
-    addrNote(label + ' \u2014 scale set from the map, no bar needed. Drag along each ridge.'
-           + ' Wrong building? Hit Move map. Picture soft? Try another Imagery source.');
+    queuePrefetch();
+    addrNote(label + ' \u2014 frame the roof first: drag to move, tap to centre, zoom as needed.'
+           + ' Then hit Use this view. Picture soft? Try another Imagery source.');
   } catch (e){
     addrNote(e.message || 'Lookup failed', true);
   } finally {
-    btn.disabled = false;
+    setBusy(false); btn.disabled = false;
   }
 }
 
@@ -1359,6 +1400,8 @@ function setImage(img, opts){
   S.mapMeta = null;
   const mvBtn = document.getElementById('modeMove');
   if (mvBtn) mvBtn.style.display = 'none';
+  const uvBtn = document.getElementById('useViewBtn');
+  if (uvBtn) uvBtn.style.display = 'none';
 
   uploadArea.style.display = 'none';
   workArea.style.display = 'block';
@@ -1366,7 +1409,10 @@ function setImage(img, opts){
 
   const found = opts.map ? null : findBar();
   if (found) S.bar = found;
-  setMode(opts.map ? 'ridge' : 'scale');
+  // A fetched map lands in MOVE mode and stays there. It used to drop straight
+  // into ridge tracing, so a drag during the fetch lag drew a ridge run instead
+  // of panning. Nothing moves on to tracing until "Use this view" is pressed.
+  setMode(opts.map ? 'move' : 'scale');
   calc();
 }
 
@@ -1383,6 +1429,7 @@ document.getElementById('newImgBtn').addEventListener('click', () => {
   S.marks = []; S.marksTouched = false; S.ftPerPx = 0; S.history = [];
   S.mapMeta = null;
   document.getElementById('modeMove').style.display = 'none';
+  document.getElementById('useViewBtn').style.display = 'none';
   imgInput.value = '';
   workArea.style.display = 'none';
   uploadArea.style.display = 'block';
@@ -1793,13 +1840,20 @@ function drawBarCrop(){
 
 /* ============================ modes + drawing ============================ */
 const MODE_BTN = { move:'modeMove', scale:'modeScale', ridge:'modeRidge', marks:'modeMarks' };
+document.getElementById('useViewBtn').addEventListener('click', () => {
+  if (S.busy) return;
+  setMode('ridge');
+  addrNote('View locked in. Drag along each ridge run \u2014 Move map if you need to reframe.');
+});
 Object.keys(MODE_BTN).forEach(m =>
   document.getElementById(MODE_BTN[m]).addEventListener('click', () => setMode(m))
 );
 
 function setMode(m){
   S.mode = m;
-  stage.style.cursor = (m === 'move') ? 'move' : '';
+  stage.style.cursor = S.busy ? 'progress' : (m === 'move') ? 'move' : '';
+  const uv = document.getElementById('useViewBtn');
+  if (uv) uv.classList.toggle('ready', m === 'move' && !!S.mapMeta);
   Object.keys(MODE_BTN).forEach(k =>
     document.getElementById(MODE_BTN[k]).classList.toggle('on', k === m)
   );
@@ -1823,10 +1877,11 @@ function updateHint(){
       hintEl.innerHTML = `<b>Drag along the scale bar</b> on the image — or along anything you know the length of — then type the distance.`;
     }
   } else if (S.mode === 'move'){
-    hintEl.innerHTML =
-      `<b>Drag the picture</b> to move the map, or <b>tap a spot</b> to centre on it.`
-      + `<br>Use the <b>Zoom</b> slider up top to pull back, find the right building, then tap it.`
-      + `<br>Scale re-sets itself every time, and anything already traced moves with the picture.`;
+    hintEl.innerHTML = S.busy
+      ? `<b>Fetching the picture\u2026</b> hold on \u2014 the canvas is locked until it lands.`
+      : `<b>Drag the picture</b> to move the map, or <b>tap a spot</b> to centre on it.`
+        + `<br>Zoom and Imagery are up top. Each change fetches a new picture, so give it a beat.`
+        + `<br>When the roof is framed the way you want it, hit <b>Use this view</b> to start tracing.`;
   } else if (S.mode === 'ridge'){
     const n = S.ridges.length;
     const tot = ridgeTotalFt();
@@ -2188,7 +2243,7 @@ function anCoords(e){
 }
 
 stage.addEventListener('pointerdown', e => {
-  if (!S.img) return;
+  if (!S.img || S.busy) return;
   e.preventDefault();
   stage.setPointerCapture(e.pointerId);
   const p = anCoords(e);
